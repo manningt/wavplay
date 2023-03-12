@@ -5,6 +5,7 @@
 int alsa_play(void);
 int alsa_init(char *device_name, char *wav_file, int period);
 void alsa_deinit(void);
+int alsa_update(void);
 
 // uint64_t micros();
 // void log_main(const char * format, ...);
