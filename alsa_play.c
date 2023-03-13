@@ -16,36 +16,19 @@ void log_main(const char *format, ...);
 #define WAV_HEADER 44
 #define SAMPLE_SIZE 2
 #define NUM_CHANNELS 1
+#define WAV_FILE_RATE 11025
 #define FRAME_SIZE (SAMPLE_SIZE * NUM_CHANNELS)
+#define PERIOD_SIZE 240
+#define BUFFER_SIZE_MULTIPLIER 20
+#define IDLE_FRAMES_AVAILABLE 4800 //found by experiment when period was 240
 
-/*
- * ALSA specifies period and buffer size in frames. Sample format, playback
- * rate, and period size determine interrupt period and latency.
- *
- * data rate = channels * audio sample * rate
- *           = 2 * 4 bytes/sample * 48000 samples/second
- *           = 384000 bytes/second
- *
- * Let's choose a period size of 128 frames.
- *
- * interrupt period = period size * frame size / data rate
- *                  = 128 frames * ( 8 bytes/frame ) / ( 384000 bytes/second )
- *                  = 2.66 ms
- *
- * A good rule of thumb is to have a buffer size >= 2 * period size
- */
-
-/* looks like period size has to be a power of 2 */
-#define PERIOD_SIZE 240 // 128
-// #define BUFFER_SIZE (3 * PERIOD_SIZE)
-#define IDLE_FRAMES_AVAILABLE 4800
+// data rate = channels * audio sample * rate = 22050
+// interrupt period = period size * frame size / data rate = 240*(2/22050) = 21.768 millis
 
 static snd_pcm_t *pcm_handle;
+long wav_size;
 char wav_buff[3][200000];
 char silence_buff[PERIOD_SIZE * 4] = {0};
-
-long wav_size;
-char *wav_buffer;
 
 int alsa_update()
 {
@@ -176,7 +159,7 @@ int alsa_play(void)
 		// #define LAST_WRITE_SIZE 16
 		// if (frames_requested < 50)
 		//     frames_requested= LAST_WRITE_SIZE;
-		frames_written = snd_pcm_writei(pcm_handle, &wav_buffer[index], frames_requested);
+		frames_written = snd_pcm_writei(pcm_handle, &wav_buff[0][index], frames_requested);
 
 		log_main("frame_write_count=%u  frames_written=%u; avail=%u",
 					frame_count, frames_written, avail); // avail_delay);
@@ -240,12 +223,11 @@ int pcm_set_sw_params(snd_pcm_t *handle, snd_pcm_sw_params_t *params, int period
 	int ret;
 	snd_pcm_uframes_t period_size, threshold;
 
-	/* get a fully populated configuration space */
+	// get a fully populated configuration space
 	ret = snd_pcm_sw_params_current(handle, params);
 	if (ret)
 	{
-		fprintf(stderr, "Cannot init sw params struct: %s\n",
-				  snd_strerror(ret));
+		fprintf(stderr, "Cannot init sw params struct: %s\n", snd_strerror(ret));
 		return ret;
 	}
 
@@ -254,37 +236,30 @@ int pcm_set_sw_params(snd_pcm_t *handle, snd_pcm_sw_params_t *params, int period
 	ret = snd_pcm_sw_params_set_avail_min(handle, params, period_size);
 	if (ret)
 	{
-		fprintf(stderr, "Cannot set min available frames: %s\n",
-				  snd_strerror(ret));
+		fprintf(stderr, "Cannot set min available frames: %s\n", snd_strerror(ret));
 		return ret;
 	}
 
-	/* set start threshold. make this equal to period size to avoid underrun
-	 * during first playback */
-	threshold = (period < 0) ? PERIOD_SIZE : period; // needs to be at least 1 frame
+	// set start threshold. make this equal to period size to avoid underrun during first playback
+	threshold = (period < 0) ? PERIOD_SIZE : period;
 	ret = snd_pcm_sw_params_set_start_threshold(handle, params, threshold);
 	if (ret)
 	{
-		fprintf(stderr, "Couldn't set start threshold: %s\n",
-				  snd_strerror(ret));
+		fprintf(stderr, "Couldn't set start threshold: %s\n", snd_strerror(ret));
 		return ret;
 	}
 
-	/* write sw params to PCM device*/
 	ret = snd_pcm_sw_params(handle, params);
 	if (ret)
 	{
-		fprintf(stderr, "Couldn't write sw params to PCM device: %s\n",
-				  snd_strerror(ret));
+		fprintf(stderr, "Couldn't write sw params to PCM device: %s\n", snd_strerror(ret));
 		return ret;
 	}
 
-	/* get start threshold */
 	ret = snd_pcm_sw_params_get_start_threshold(params, &threshold);
 	if (ret)
 	{
-		fprintf(stderr, "Couldn't get start threshold: %s\n",
-				  snd_strerror(ret));
+		fprintf(stderr, "Couldn't get start threshold: %s\n", snd_strerror(ret));
 		return ret;
 	}
 	printf("Start threshold is %lu frames\n", threshold);
@@ -295,51 +270,43 @@ int pcm_set_sw_params(snd_pcm_t *handle, snd_pcm_sw_params_t *params, int period
 int pcm_print_hw_params(snd_pcm_hw_params_t *params)
 {
 	int ret, dir;
-	snd_pcm_uframes_t buffer_frames, period_frames;
+	enum MIN_MAX {MIN, MAX};
+	snd_pcm_uframes_t buffer_frames[2], period_frames[2];
 
-	/* get min buffer and period size */
-
-	ret = snd_pcm_hw_params_get_period_size_min(params, &period_frames, &dir);
+	ret = snd_pcm_hw_params_get_period_size_min(params, &period_frames[MIN], &dir);
 	if (ret)
 	{
-		fprintf(stderr, "Failed to get min period size: %s\n",
-				  snd_strerror(ret));
+		fprintf(stderr, "Failed to get min period size: %s\n", snd_strerror(ret));
 		return ret;
 	}
-	printf("Minimum period size = %lu frames, %lu bytes\n", period_frames,
-			 period_frames * FRAME_SIZE);
-
-	ret = snd_pcm_hw_params_get_buffer_size_min(params, &buffer_frames);
+	ret = snd_pcm_hw_params_get_period_size_max(params, &period_frames[MAX], &dir);
 	if (ret)
 	{
-		fprintf(stderr, "Failed to get min buffer size: %s\n",
-				  snd_strerror(ret));
+		fprintf(stderr, "Failed to get max period size: %s\n", snd_strerror(ret));
 		return ret;
 	}
-	printf("Minimum buffer size = %lu frames, %lu bytes\n", buffer_frames,
-			 buffer_frames * FRAME_SIZE);
+	printf("period size: min=%lu frames (%lu bytes) max=%lu frames (%lu bytes)\n", 
+		period_frames[MIN], period_frames[MIN] * FRAME_SIZE, 
+		period_frames[MAX], period_frames[MAX] * FRAME_SIZE);
 
-	/* get max buffer and period size */
 
-	ret = snd_pcm_hw_params_get_period_size_max(params, &period_frames, &dir);
+	ret = snd_pcm_hw_params_get_buffer_size_min(params, &buffer_frames[MIN]);
 	if (ret)
 	{
-		fprintf(stderr, "Failed to get max period size: %s\n",
-				  snd_strerror(ret));
+		fprintf(stderr, "Failed to get min buffer size: %s\n", snd_strerror(ret));
 		return ret;
 	}
-	printf("Maximum period size = %lu frames, %lu bytes\n", period_frames,
-			 period_frames * FRAME_SIZE);
 
-	ret = snd_pcm_hw_params_get_buffer_size_max(params, &buffer_frames);
+	ret = snd_pcm_hw_params_get_buffer_size_max(params, &buffer_frames[MAX]);
 	if (ret)
 	{
-		fprintf(stderr, "Failed to get max buffer size: %s\n",
-				  snd_strerror(ret));
+		fprintf(stderr, "Failed to get max buffer size: %s\n", snd_strerror(ret));
 		return ret;
 	}
-	printf("Maximum buffer size = %lu frames, %lu bytes\n", buffer_frames,
-			 buffer_frames * FRAME_SIZE);
+
+	printf("buffer size: min=%lu frames (%lu bytes) max=%lu frames (%lu bytes)\n", 
+		buffer_frames[MIN], buffer_frames[MIN] * FRAME_SIZE, 
+		buffer_frames[MAX], buffer_frames[MAX] * FRAME_SIZE);
 
 	return 0;
 }
@@ -352,7 +319,6 @@ void pcm_print_state(snd_pcm_t *handle)
 int pcm_set_hw_params(snd_pcm_t *handle, snd_pcm_hw_params_t *params, int period)
 {
 	int ret;
-	unsigned int requested_rate, set_rate;
 	snd_pcm_uframes_t buffer_size, period_size;
 
 	/* Get a fully populated configuration space */
@@ -377,14 +343,12 @@ int pcm_set_hw_params(snd_pcm_t *handle, snd_pcm_hw_params_t *params, int period
 	 */
 
 	ret = snd_pcm_hw_params_set_access(handle, params, SND_PCM_ACCESS_RW_INTERLEAVED);
-	// ret = snd_pcm_hw_params_set_access(handle, params, SND_PCM_ACCESS_RW_NONINTERLEAVED);
 	if (ret)
 	{
 		fprintf(stderr, "Access type not available: %s\n", snd_strerror(ret));
 		return ret;
 	}
 
-	// ret = snd_pcm_hw_params_set_format(handle, params, SND_PCM_FORMAT_S32_LE);
 	ret = snd_pcm_hw_params_set_format(handle, params, SND_PCM_FORMAT_S16);
 	if (ret)
 	{
@@ -392,7 +356,6 @@ int pcm_set_hw_params(snd_pcm_t *handle, snd_pcm_hw_params_t *params, int period
 		return ret;
 	}
 
-	/* set subformat */
 	ret = snd_pcm_hw_params_set_subformat(handle, params, SND_PCM_SUBFORMAT_STD);
 	if (ret)
 	{
@@ -400,7 +363,7 @@ int pcm_set_hw_params(snd_pcm_t *handle, snd_pcm_hw_params_t *params, int period
 		return ret;
 	}
 
-	// disable hardware resampling
+	// enable hardware resampling
 	// ret = snd_pcm_hw_params_set_rate_resample(handle, params, 0);
 	ret = snd_pcm_hw_params_set_rate_resample(handle, params, 1); // enable hardware resample - plays 4x slow
 	if (ret)
@@ -416,19 +379,16 @@ int pcm_set_hw_params(snd_pcm_t *handle, snd_pcm_hw_params_t *params, int period
 		return ret;
 	}
 
-	/* set playback rate */
-	// requested_rate = set_rate = 48000; // 48 kHz
-	// ret = snd_pcm_hw_params_set_rate_near(handle, params, &set_rate, 0);
-	requested_rate = set_rate = 11025;
-	int rate_dir = 0;
-	ret = snd_pcm_hw_params_set_rate_near(handle, params, &set_rate, &rate_dir);
+	// set playback rate
+	unsigned int requested_rate= WAV_FILE_RATE;
+	unsigned int set_rate= requested_rate;
+	ret = snd_pcm_hw_params_set_rate_near(handle, params, &set_rate, 0);
 	if (ret)
 	{
-		fprintf(stderr, "Rate no available for playback: %s\n",
-				  snd_strerror(ret));
+		fprintf(stderr, "Rate no available for playback: %s\n", snd_strerror(ret));
 		return ret;
 	}
-	// if (set_rate != requested_rate) {
+
 	if (set_rate < requested_rate - 2 && set_rate > requested_rate + 2)
 	{
 		fprintf(stderr,
@@ -437,7 +397,7 @@ int pcm_set_hw_params(snd_pcm_t *handle, snd_pcm_hw_params_t *params, int period
 		return -EINVAL;
 	}
 
-	pcm_print_hw_params(params);
+	// pcm_print_hw_params(params);
 
 	period_size = (period < 0) ? PERIOD_SIZE : period;
 	ret = snd_pcm_hw_params_set_period_size(handle, params, period_size, 0);
@@ -446,20 +406,18 @@ int pcm_set_hw_params(snd_pcm_t *handle, snd_pcm_hw_params_t *params, int period
 		fprintf(stderr, "Period size=%ld not available: %s\n", period_size, snd_strerror(ret));
 		return ret;
 	}
-	printf("Period size set to %lu frames\n", period_size);
+	// printf("Period size set to %lu frames\n", period_size);
 
-	// buffer_size = (period < 0) ? BUFFER_SIZE : (20*period); //changed from 3 to 20
-	buffer_size = (period < 0) ? (20 * PERIOD_SIZE) : (20 * period);
+	buffer_size = (period < 0) ? (BUFFER_SIZE_MULTIPLIER * PERIOD_SIZE) : (BUFFER_SIZE_MULTIPLIER * period);
 	ret = snd_pcm_hw_params_set_buffer_size(handle, params, buffer_size);
 	if (ret)
 	{
 		fprintf(stderr, "Buffer size not available: %s\n", snd_strerror(ret));
 		return ret;
 	}
-	printf("Buffer size set to %lu frames\n", buffer_size);
+	// printf("Buffer size set to %lu frames\n", buffer_size);
 
-	/* write hardware parameters to PCM device */
-	ret = snd_pcm_hw_params(handle, params);
+	ret = snd_pcm_hw_params(handle, params); // write hardware parameters
 	if (ret)
 	{
 		fprintf(stderr,
@@ -468,131 +426,96 @@ int pcm_set_hw_params(snd_pcm_t *handle, snd_pcm_hw_params_t *params, int period
 		return ret;
 	}
 
-	/* snd_pcm_hw_params() should call snd_pcm_prepare() */
+	// snd_pcm_hw_params() should call snd_pcm_prepare()
 	pcm_print_state(handle);
 
-	/* get period size */
 	int dir;
 	ret = snd_pcm_hw_params_get_period_size(params, &period_size, &dir);
 	if (ret)
 	{
 		fprintf(stderr, "Can't get period size\n");
 	}
-	printf("Actual period size = %lu\n", period_size);
-
-	/* get period time */
 	unsigned int period_time;
 	ret = snd_pcm_hw_params_get_period_time(params, &period_time, &dir);
 	if (ret)
 	{
 		fprintf(stderr, "Can't get period time\n");
 	}
-	printf("Actual period time = % f\n", period_time / 1000.0);
-
-	/* get buffer size */
 	ret = snd_pcm_hw_params_get_buffer_size(params, &buffer_size);
 	if (ret)
 	{
 		fprintf(stderr, "Can't get buffer size\n");
 	}
-	printf("Actual buffer size = %lu\n", buffer_size);
+	printf("Actuals: period size=%lu (time=%0.3f millis)  buffer size=%lu  rate=%u\n", 
+		period_size, period_time / 1000.0, buffer_size, set_rate);
 
 	return 0;
 }
 
 int read_wav_file(char *wav_file)
 {
-	int ret;
-	FILE *wav_fd;
-
-	/* open wave file and get size */
-	wav_fd = fopen(wav_file, "rb");
+	FILE *wav_fd = fopen(wav_file, "rb");
+	if (wav_fd == NULL)
+	{
+		fprintf(stderr, "Error opening file=%s\n", wav_file);
+		return -1;
+	}
 	fseek(wav_fd, 0, SEEK_END);
 	wav_size = ftell(wav_fd);
 	rewind(wav_fd);
 
-	/* allocate a buffer for audio samples and fill it */
-	wav_buffer = malloc(wav_size + 4);
-	if (!wav_buffer)
+	if (fread(wav_buff[0], 1, wav_size, wav_fd) != (size_t)wav_size)
 	{
-		ret = -ENOMEM;
-		fprintf(stderr, "Cannot allocate audio sample buffer: %s\n",
-				  strerror(ret));
-		return ret;
-	}
-	if (fread(wav_buffer, 1, wav_size, wav_fd) != (size_t)wav_size)
-	{
-		ret = -1;
 		fprintf(stderr, "Error reading wave file\n");
-		free(wav_buffer);
-		return ret;
+		return -1;
 	}
 	fclose(wav_fd);
-
 	return 0;
 }
 
-int alsa_init(char *device_name, char *wav_file, int period)
+int alsa_init(char *device_name, int period)
 {
 	int ret;
 
 	snd_pcm_hw_params_t *hw_params;
 	snd_pcm_sw_params_t *sw_params;
-
-	ret = read_wav_file(wav_file);
-	if (ret)
-	{
-		return ret;
-	}
-
 	if (device_name != NULL)
-	{
-		ret =
-			 snd_pcm_open(&pcm_handle, device_name, SND_PCM_STREAM_PLAYBACK, 0);
-	}
+		ret= snd_pcm_open(&pcm_handle, device_name, SND_PCM_STREAM_PLAYBACK, 0);
 	else
-	{
 		ret = snd_pcm_open(&pcm_handle, PCM_DEVICE, SND_PCM_STREAM_PLAYBACK, 0);
-	}
+
 	if (ret)
 	{
 		fprintf(stderr, "PCM device open error: %s\n", snd_strerror(ret));
 		return ret;
 	}
 
-	// pcm_print_state(pcm_handle);
+	pcm_print_state(pcm_handle);
 
 	ret = snd_pcm_hw_params_malloc(&hw_params);
 	if (ret)
 	{
-		fprintf(stderr, "Cannot allocate hw param struct: %s\n",
-				  snd_strerror(ret));
+		fprintf(stderr, "Cannot allocate hw param struct: %s\n", snd_strerror(ret));
 		return ret;
 	}
 	ret = pcm_set_hw_params(pcm_handle, hw_params, period);
 	if (ret)
-	{
 		return ret;
-	}
-	// show_available_sample_formats(pcm_handle, hw_params);
 	snd_pcm_hw_params_free(hw_params);
+
 
 	ret = snd_pcm_sw_params_malloc(&sw_params);
 	if (ret)
 	{
-		fprintf(stderr, "Cannot allocate sw param struct: %s\n",
-				  snd_strerror(ret));
+		fprintf(stderr, "Cannot allocate sw param struct: %s\n",  snd_strerror(ret));
 		return ret;
 	}
 	ret = pcm_set_sw_params(pcm_handle, sw_params, period);
 	if (ret)
-	{
 		return ret;
-	}
 	snd_pcm_sw_params_free(sw_params);
 
-	pcm_print_state(pcm_handle);
-
+	// pcm_print_state(pcm_handle);
 	// printf("PCM device name: %s\n", snd_pcm_name(pcm_handle));
 	return 0;
 }
@@ -603,7 +526,6 @@ void alsa_deinit(void)
 	snd_pcm_drain(pcm_handle);
 	log_main("drain_micros=%llu", micros() - before_drain_micros);
 	snd_pcm_close(pcm_handle);
-	free(wav_buffer);
 }
 
 // --------------- common code

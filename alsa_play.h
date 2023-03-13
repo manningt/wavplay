@@ -3,9 +3,10 @@
 #include <stdint.h>
 
 int alsa_play(void);
-int alsa_init(char *device_name, char *wav_file, int period);
+int alsa_init(char *device_name, int period);
 void alsa_deinit(void);
 int alsa_update(void);
+int read_wav_file(char *wav_file);
 
 // uint64_t micros();
 // void log_main(const char * format, ...);

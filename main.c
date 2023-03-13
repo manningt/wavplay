@@ -14,14 +14,13 @@ void sleepMicros(uint32_t micros)
 	struct timespec sleep;
 	sleep.tv_sec = micros / 1000000L;
 	sleep.tv_nsec = (micros % 1000000L) * 1000L;
-	while (nanosleep(&sleep, &sleep) && errno == EINTR)
-		;
+	while (nanosleep(&sleep, &sleep) && errno == EINTR);
 }
 
 int main(int argc, char *argv[])
 {
-	char wav_file[96] = {0};
-	char alsa_device[36] = "bluealsa:DEV=F4:4E:FD:00:65:5E";
+	char wav_file[96]= {0};
+	char alsa_device[36]= "bluealsa:DEV=F4:4E:FD:00:65:5E";
 	int opt;
 	int period = -1;
 
@@ -39,19 +38,17 @@ int main(int argc, char *argv[])
 		case 'd':
 			strcpy(alsa_device, optarg);
 			break;
-		case '?':
-		/* fall though */
 		default:
 			fprintf(stderr, "unknown/invalid option: '-%c'\n", optopt);
 			exit(-1);
 		}
 	}
 
-	if (alsa_init(alsa_device, wav_file, period) != 0)
-	{
-		printf("alsa init failed\n");
+	if (read_wav_file(wav_file) != 0)
 		exit(-1);
-	}
+
+	if (alsa_init(alsa_device, period) != 0)
+		exit(-1);
 
 	int i;
 	for (i = 0; i < 60; i++)
