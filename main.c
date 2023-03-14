@@ -43,8 +43,8 @@ int main(int argc, char *argv[])
 		}
 	}
 
-	if (read_wav_file("/home/pi/grey.wav") != 0)
-		exit(-1);
+	// if (read_wav_file("/home/pi/grey.wav") != 0)
+	// 	exit(-1);
 
 	if (read_wav_file(wav_file) != 0)
 		exit(-1);
@@ -53,7 +53,7 @@ int main(int argc, char *argv[])
 		exit(-1);
 
 	int i;
-	for (i = 0; i < 120; i++)
+	for (i = 0; i < 64; i++)
 	{
 		alsa_update();
 		sleepMicros(25000);

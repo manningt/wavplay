@@ -29,7 +29,7 @@ void log_main(const char *format, ...);
 static snd_pcm_t *pcm_handle;
 long wav_size;
 char wav_buff[3][200000];
-char filler_buff[22272];
+char filler_buff[22272]= {0};
 #define FILLER_START 1800
 
 uint8_t wav_buffer_available= 0;
@@ -40,11 +40,12 @@ int alsa_update()
 	int avail_buffs;
 	bool err = false;
 	char *wav_buff_ptr;
-	int index = WAV_HEADER; // skip header and start at PCM data
-	int filler_index= FILLER_START;
 	snd_pcm_sframes_t frames_requested, frames_written;
 	uint32_t frames_written_count=0;
 	uint8_t loop_count=0;
+
+	static int index = WAV_HEADER; // skip header and start at PCM data
+	static int filler_index= FILLER_START;
 	static uint32_t call_count=0;
 	static uint32_t total_frames_written_count=0;
 
@@ -67,6 +68,9 @@ int alsa_update()
 	// 	log_main("drain_micros=%llu", micros() - before_drain_micros);
 	// }
 
+	if (call_count == 32)
+		wav_buffer_available= 1;
+
 	avail_buffs = snd_pcm_avail(pcm_handle);
 	while (avail_buffs >= (IDLE_FRAMES_AVAILABLE - (4 * PERIOD_SIZE)))
 	{
@@ -85,10 +89,7 @@ int alsa_update()
 		if (!wav_buffer_available)
 			wav_buff_ptr= filler_buff+filler_index;
 		else
-		{
 			wav_buff_ptr= wav_buff[0]+index;
-			printf("playing wav file\n");
-		}
 
 		frames_written = snd_pcm_writei(pcm_handle, wav_buff_ptr, frames_requested);
 
@@ -138,9 +139,8 @@ int alsa_update()
 			{
 				if ((index += (frames_requested * FRAME_SIZE)) >= wav_size)
 				{
-					log_main("Finished playing buff[0]");
 					// log_main("elapsed micros in play: %lld", (micros() - alsa_play_start_micros));
-					break;
+					wav_buffer_available= 0;
 				}
 			}
 		}
@@ -155,8 +155,9 @@ int alsa_update()
 	
 	call_count++;
 	total_frames_written_count += frames_written_count;
-	// log_main("call_count=%u total_frames=%u avail=%u state=%s",
-   // 	call_count, total_frames_written_count, avail_buffs, snd_pcm_state_name(snd_pcm_state(pcm_handle)));
+	log_main("call_count=%u total_frames=%u avail=%u playing_wav=%u index=%d state=%s",
+   	call_count, total_frames_written_count, avail_buffs, wav_buffer_available,
+		index, snd_pcm_state_name(snd_pcm_state(pcm_handle)));
 
 	return err;
 }
