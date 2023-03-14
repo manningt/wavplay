@@ -30,6 +30,7 @@ static snd_pcm_t *pcm_handle;
 long wav_size;
 char wav_buff[3][200000];
 char filler_buff[22272];
+#define FILLER_START 1800
 
 uint8_t wav_buffer_available= 0;
 
@@ -40,7 +41,7 @@ int alsa_update()
 	bool err = false;
 	char *wav_buff_ptr;
 	int index = WAV_HEADER; // skip header and start at PCM data
-	int filler_index= WAV_HEADER;
+	int filler_index= FILLER_START;
 	snd_pcm_sframes_t frames_requested, frames_written;
 	uint32_t frames_written_count=0;
 	uint8_t loop_count=0;
@@ -67,7 +68,7 @@ int alsa_update()
 	// }
 
 	avail_buffs = snd_pcm_avail(pcm_handle);
-	while (avail_buffs >= (IDLE_FRAMES_AVAILABLE - (12 * PERIOD_SIZE)))
+	while (avail_buffs >= (IDLE_FRAMES_AVAILABLE - (4 * PERIOD_SIZE)))
 	{
 		frames_requested = snd_pcm_avail_update(pcm_handle);
 		if (frames_requested < 0)
@@ -131,7 +132,7 @@ int alsa_update()
 			if (!wav_buffer_available)
 			{
 				if ((filler_index += (frames_requested * FRAME_SIZE)) >= 0x5000)
-					filler_index= WAV_HEADER;
+					filler_index= FILLER_START;
 			}
 			else
 			{
@@ -298,7 +299,7 @@ int pcm_set_sw_params(snd_pcm_t *handle, snd_pcm_sw_params_t *params, int period
 
 	// set start threshold. make this equal to period size to avoid underrun during first playback
 	threshold = (period < 0) ? PERIOD_SIZE : period;
-	threshold= 1;
+	threshold /= 2;
 	ret = snd_pcm_sw_params_set_start_threshold(handle, params, threshold);
 	if (ret)
 	{
@@ -313,13 +314,13 @@ int pcm_set_sw_params(snd_pcm_t *handle, snd_pcm_sw_params_t *params, int period
 		return ret;
 	}
 
-	ret = snd_pcm_sw_params_get_start_threshold(params, &threshold);
-	if (ret)
-	{
-		fprintf(stderr, "Couldn't get start threshold: %s\n", snd_strerror(ret));
-		return ret;
-	}
-	printf("Start threshold is %lu frames\n", threshold);
+	// ret = snd_pcm_sw_params_get_start_threshold(params, &threshold);
+	// if (ret)
+	// {
+	// 	fprintf(stderr, "Couldn't get start threshold: %s\n", snd_strerror(ret));
+	// 	return ret;
+	// }
+	// printf("Start threshold is %lu frames\n", threshold);
 
 	return 0;
 }

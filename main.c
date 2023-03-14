@@ -56,7 +56,7 @@ int main(int argc, char *argv[])
 	for (i = 0; i < 120; i++)
 	{
 		alsa_update();
-		sleepMicros(22000);
+		sleepMicros(25000);
 	}
 	printf("sleeping...\n");
 	sleepMicros(4000000);
