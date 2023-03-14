@@ -30,7 +30,6 @@ int main(int argc, char *argv[])
 		{
 		case 'f':
 			strcpy(wav_file, optarg);
-			printf("wav file %s\n", wav_file);
 			break;
 		case 'p':
 			period = atoi(optarg);
@@ -44,6 +43,9 @@ int main(int argc, char *argv[])
 		}
 	}
 
+	if (read_wav_file("/home/pi/grey.wav") != 0)
+		exit(-1);
+
 	if (read_wav_file(wav_file) != 0)
 		exit(-1);
 
@@ -51,16 +53,15 @@ int main(int argc, char *argv[])
 		exit(-1);
 
 	int i;
-	for (i = 0; i < 60; i++)
+	for (i = 0; i < 9; i++)
 	{
 		alsa_update();
 		sleepMicros(25);
-		printf("%d..", i);
 	}
-	printf("\n Done.\n");
-	return 0;
+	printf("sleeping...\n");
+	sleepMicros(2000000);
 
-	alsa_play();
+	// alsa_play();
 	// printf("between plays\n");
 	// alsa_play();
 	alsa_deinit();

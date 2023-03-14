@@ -21,6 +21,7 @@ void log_main(const char *format, ...);
 #define PERIOD_SIZE 240
 #define BUFFER_SIZE_MULTIPLIER 20
 #define IDLE_FRAMES_AVAILABLE 4800 //found by experiment when period was 240
+// 4800 (idle buffers) - 960 (43 mSec) = 3840
 
 // data rate = channels * audio sample * rate = 22050
 // interrupt period = period size * frame size / data rate = 240*(2/22050) = 21.768 millis
@@ -28,15 +29,21 @@ void log_main(const char *format, ...);
 static snd_pcm_t *pcm_handle;
 long wav_size;
 char wav_buff[3][200000];
-char silence_buff[PERIOD_SIZE * 4] = {0};
+char filler_buff[22272];
+
+uint8_t wav_buffer_available= 0;
 
 int alsa_update()
 {
 	int ret;
 	int avail_buffs;
 	bool err = false;
-	// int index = WAV_HEADER; // skip header and start at PCM data
+	char *wav_buff_ptr;
+	int index = WAV_HEADER; // skip header and start at PCM data
 	snd_pcm_sframes_t frames_requested, frames_written;
+	int frames_written_count=0;
+	int loop_count=0;
+	static int call_count=0;
 
 	ret = snd_pcm_wait(pcm_handle, 1000); // returns 1 normally
 	if (ret == 0)
@@ -50,19 +57,37 @@ int alsa_update()
 		return ret;
 	}
 
-	do {
+	// if (call_count== 0)
+	// {
+	// 	uint64_t before_drain_micros = micros();
+	// 	snd_pcm_drain(pcm_handle);
+	// 	log_main("drain_micros=%llu", micros() - before_drain_micros);
+	// }
+
+	avail_buffs = snd_pcm_avail(pcm_handle);
+	while (avail_buffs >= (IDLE_FRAMES_AVAILABLE - (12 * PERIOD_SIZE)))
+	{
 		frames_requested = snd_pcm_avail_update(pcm_handle);
 		if (frames_requested < 0)
 		{
 			fprintf(stderr, "PCM error requesting frames: %s\n",
 					  snd_strerror(ret));
 			err = true;
-			break;
+			return -1;
 		}
-		frames_written = snd_pcm_writei(pcm_handle, &silence_buff, frames_requested);
+		frames_requested =
+			(frames_requested > PERIOD_SIZE) ? PERIOD_SIZE : frames_requested;
 
-		// log_main("frame_write_count=%u  frames_written=%u; avail=%u",
-		//     frame_count, frames_written, avail); //avail_delay);
+
+		if (!wav_buffer_available)
+			wav_buff_ptr= filler_buff;
+		else
+		{
+			wav_buff_ptr= wav_buff[0]+index;
+			printf("playing wav file\n");
+		}
+
+		frames_written = snd_pcm_writei(pcm_handle, wav_buff_ptr, frames_requested);
 
 		if (frames_written == -EAGAIN)
 			continue;
@@ -76,7 +101,7 @@ int alsa_update()
 						  "Can't recover from underrun, prepare failed: %s\n",
 						  snd_strerror(frames_written));
 				err = true;
-				break;
+			return -1;
 			}
 		}
 		else if (frames_written == -ESTRPIPE)
@@ -95,18 +120,35 @@ int alsa_update()
 							  "Can't recover from suspend, prepare failed: %s\n",
 							  snd_strerror(frames_written));
 					err = true;
-					break;
+				return -1;
 				}
 			}
 		}
+		frames_written_count += frames_written;
+
+		if (wav_buffer_available && 
+			((index += (frames_requested * FRAME_SIZE)) >= wav_size))
+			log_main("Finished playing buff[0]");
+			// log_main("elapsed micros in play: %lld", (micros() - alsa_play_start_micros));
+
 		avail_buffs = snd_pcm_avail(pcm_handle);
-	} while (avail_buffs >= (IDLE_FRAMES_AVAILABLE - (4 * PERIOD_SIZE)));
+		log_main("call_count=%d  loop_count=%d frames_count=%d; avail=%d",
+			call_count, loop_count, frames_written_count, avail_buffs);
+		loop_count += 1;
+	}
+	
+	call_count++;
+	log_main("call_count=%u  avail=%u",
+   	call_count, avail_buffs);
+	// log_main("call_count=%u  frames_count=%u; avail=%u",
+   // 	call_count, frames_count, avail_buffs);
 
 	return err;
 }
 
 int alsa_play(void)
 {
+	printf("Starting alsa_play");
 	uint64_t alsa_play_start_micros = micros();
 
 	int frame_count = 0;
@@ -242,6 +284,7 @@ int pcm_set_sw_params(snd_pcm_t *handle, snd_pcm_sw_params_t *params, int period
 
 	// set start threshold. make this equal to period size to avoid underrun during first playback
 	threshold = (period < 0) ? PERIOD_SIZE : period;
+	threshold= 1;
 	ret = snd_pcm_sw_params_set_start_threshold(handle, params, threshold);
 	if (ret)
 	{
@@ -454,6 +497,8 @@ int pcm_set_hw_params(snd_pcm_t *handle, snd_pcm_hw_params_t *params, int period
 
 int read_wav_file(char *wav_file)
 {
+	int32_t bytes_read;
+
 	FILE *wav_fd = fopen(wav_file, "rb");
 	if (wav_fd == NULL)
 	{
@@ -464,7 +509,15 @@ int read_wav_file(char *wav_file)
 	wav_size = ftell(wav_fd);
 	rewind(wav_fd);
 
-	if (fread(wav_buff[0], 1, wav_size, wav_fd) != (size_t)wav_size)
+	if (strstr(wav_file, "grey") != NULL)
+	{
+		bytes_read= fread(filler_buff, 1, wav_size, wav_fd);
+		printf("read %s\n", wav_file);
+	}
+	else
+		bytes_read= fread(wav_buff[0], 1, wav_size, wav_fd);
+
+	if (bytes_read != wav_size)
 	{
 		fprintf(stderr, "Error reading wave file\n");
 		return -1;

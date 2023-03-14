@@ -8,6 +8,8 @@ void alsa_deinit(void);
 int alsa_update(void);
 int read_wav_file(char *wav_file);
 
+extern uint8_t wav_buffer_available;
+
 // uint64_t micros();
 // void log_main(const char * format, ...);
 // void sleepMicros(uint32_t micros);
