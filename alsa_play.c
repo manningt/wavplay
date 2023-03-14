@@ -40,10 +40,12 @@ int alsa_update()
 	bool err = false;
 	char *wav_buff_ptr;
 	int index = WAV_HEADER; // skip header and start at PCM data
+	int filler_index= WAV_HEADER;
 	snd_pcm_sframes_t frames_requested, frames_written;
-	int frames_written_count=0;
-	int loop_count=0;
-	static int call_count=0;
+	uint32_t frames_written_count=0;
+	uint8_t loop_count=0;
+	static uint32_t call_count=0;
+	static uint32_t total_frames_written_count=0;
 
 	ret = snd_pcm_wait(pcm_handle, 1000); // returns 1 normally
 	if (ret == 0)
@@ -80,7 +82,7 @@ int alsa_update()
 
 
 		if (!wav_buffer_available)
-			wav_buff_ptr= filler_buff;
+			wav_buff_ptr= filler_buff+filler_index;
 		else
 		{
 			wav_buff_ptr= wav_buff[0]+index;
@@ -124,24 +126,36 @@ int alsa_update()
 				}
 			}
 		}
+		else 
+		{
+			if (!wav_buffer_available)
+			{
+				if ((filler_index += (frames_requested * FRAME_SIZE)) >= 0x5000)
+					filler_index= WAV_HEADER;
+			}
+			else
+			{
+				if ((index += (frames_requested * FRAME_SIZE)) >= wav_size)
+				{
+					log_main("Finished playing buff[0]");
+					// log_main("elapsed micros in play: %lld", (micros() - alsa_play_start_micros));
+					break;
+				}
+			}
+		}
+
 		frames_written_count += frames_written;
 
-		if (wav_buffer_available && 
-			((index += (frames_requested * FRAME_SIZE)) >= wav_size))
-			log_main("Finished playing buff[0]");
-			// log_main("elapsed micros in play: %lld", (micros() - alsa_play_start_micros));
-
 		avail_buffs = snd_pcm_avail(pcm_handle);
-		log_main("call_count=%d  loop_count=%d frames_count=%d; avail=%d",
-			call_count, loop_count, frames_written_count, avail_buffs);
+		// log_main("call_count=%d  loop_count=%d frames_count=%d avail=%d",
+		// 	call_count, loop_count, frames_written_count, avail_buffs);
 		loop_count += 1;
 	}
 	
 	call_count++;
-	log_main("call_count=%u  avail=%u",
-   	call_count, avail_buffs);
-	// log_main("call_count=%u  frames_count=%u; avail=%u",
-   // 	call_count, frames_count, avail_buffs);
+	total_frames_written_count += frames_written_count;
+	// log_main("call_count=%u total_frames=%u avail=%u state=%s",
+   // 	call_count, total_frames_written_count, avail_buffs, snd_pcm_state_name(snd_pcm_state(pcm_handle)));
 
 	return err;
 }

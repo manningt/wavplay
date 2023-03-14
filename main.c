@@ -53,13 +53,13 @@ int main(int argc, char *argv[])
 		exit(-1);
 
 	int i;
-	for (i = 0; i < 9; i++)
+	for (i = 0; i < 120; i++)
 	{
 		alsa_update();
-		sleepMicros(25);
+		sleepMicros(22000);
 	}
 	printf("sleeping...\n");
-	sleepMicros(2000000);
+	sleepMicros(4000000);
 
 	// alsa_play();
 	// printf("between plays\n");
