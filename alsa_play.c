@@ -28,8 +28,7 @@
 static snd_pcm_t *pcm_handle;
 #define NUMBER_OF_BUFFERS 4
 long wav_size[NUMBER_OF_BUFFERS];
-char wav_buff[4][200000]= {0};
-#define FILLER_START 1800
+char wav_buff[NUMBER_OF_BUFFERS][200000]= {0};
 
 uint8_t wav_buffer_available= 0;
 
@@ -43,8 +42,7 @@ int alsa_update()
 	uint32_t frames_written_count=0;
 	uint8_t loop_count=0;
 
-	static int index = WAV_HEADER; // skip header and start at PCM data
-	static int filler_index= FILLER_START;
+	static int index[4]= {WAV_HEADER, WAV_HEADER, WAV_HEADER, WAV_HEADER}; // skip header and start at PCM data
 	static uint32_t call_count=0;
 	static uint32_t total_frames_written_count=0;
 
@@ -78,10 +76,10 @@ int alsa_update()
 			(frames_requested > PERIOD_SIZE) ? PERIOD_SIZE : frames_requested;
 
 		if (!wav_buffer_available)
-			wav_buff_ptr= wav_buff[0]+filler_index;
+			wav_buff_ptr= wav_buff[0]+index[0];
 		else
 		{
-			wav_buff_ptr= wav_buff[1]+index;
+			wav_buff_ptr= wav_buff[1]+index[1];
 			// if ((frames_requested * FRAME_SIZE) + index > (wav_size[1]))
 			// {
 			// 	snd_pcm_sframes_t temp= ((wav_size[1] - index) / FRAME_SIZE) >> 3;
@@ -133,12 +131,12 @@ int alsa_update()
 		{
 			if (!wav_buffer_available)
 			{
-				if ((filler_index += (frames_requested * FRAME_SIZE)) >= wav_size[0])
-					filler_index= FILLER_START;
+				if ((index[0] += (frames_requested * FRAME_SIZE)) >= wav_size[0])
+					index[0]= WAV_HEADER;
 			}
 			else
 			{
-				if ((index += (frames_requested * FRAME_SIZE)) >= wav_size[1])
+				if ((index[1] += (frames_requested * FRAME_SIZE)) >= wav_size[1])
 				{
 					// log_main("elapsed micros in play: %lld", (micros() - alsa_play_start_micros));
 					wav_buffer_available= 0;
@@ -162,7 +160,7 @@ int alsa_update()
 
 	return err;
 }
-
+/*
 int alsa_play(void)
 {
 	printf("Starting alsa_play");
@@ -205,11 +203,11 @@ int alsa_play(void)
 		// 	continue;
 		// }
 
-		/* deliver data one period at a time */
+		// deliver data one period at a time 
 		frames_requested =
 			 (frames_requested > PERIOD_SIZE) ? PERIOD_SIZE : frames_requested;
 
-		/* don't overrun wav file buffer */
+		// don't overrun wav file buffer 
 		frames_requested = (frames_requested * FRAME_SIZE + index > wav_size[1])
 									  ? (wav_size[1] - index) / FRAME_SIZE
 									  : frames_requested;
@@ -276,6 +274,7 @@ int alsa_play(void)
 	}
 	return -1; // we should never get here
 }
+*/
 
 int pcm_set_sw_params(snd_pcm_t *handle, snd_pcm_sw_params_t *params, int period)
 {
@@ -316,13 +315,16 @@ int pcm_set_sw_params(snd_pcm_t *handle, snd_pcm_sw_params_t *params, int period
 		return ret;
 	}
 
-	// ret = snd_pcm_sw_params_get_start_threshold(params, &threshold);
-	// if (ret)
-	// {
-	// 	fprintf(stderr, "Couldn't get start threshold: %s\n", snd_strerror(ret));
-	// 	return ret;
-	// }
-	// printf("Start threshold is %lu frames\n", threshold);
+	if (0)
+	{
+		ret = snd_pcm_sw_params_get_start_threshold(params, &threshold);
+		if (ret)
+		{
+			fprintf(stderr, "Couldn't get start threshold: %s\n", snd_strerror(ret));
+			return ret;
+		}
+		printf("Start threshold is %lu frames\n", threshold);
+	}
 
 	return 0;
 }
