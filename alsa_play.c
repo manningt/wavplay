@@ -8,8 +8,7 @@
 #include <alsa/asoundlib.h>
 #include <stdbool.h>
 
-uint64_t micros();
-void log_main(const char *format, ...);
+#include "alsa_play.h"
 
 #define PCM_DEVICE "hw:1,0"
 
@@ -27,9 +26,9 @@ void log_main(const char *format, ...);
 // interrupt period = period size * frame size / data rate = 240*(2/22050) = 21.768 millis
 
 static snd_pcm_t *pcm_handle;
-long wav_size;
-char wav_buff[3][200000];
-char filler_buff[22272]= {0};
+#define NUMBER_OF_BUFFERS 4
+long wav_size[NUMBER_OF_BUFFERS];
+char wav_buff[4][200000]= {0};
 #define FILLER_START 1800
 
 uint8_t wav_buffer_available= 0;
@@ -61,14 +60,7 @@ int alsa_update()
 		return ret;
 	}
 
-	// if (call_count== 0)
-	// {
-	// 	uint64_t before_drain_micros = micros();
-	// 	snd_pcm_drain(pcm_handle);
-	// 	log_main("drain_micros=%llu", micros() - before_drain_micros);
-	// }
-
-	if (call_count == 32)
+	if (call_count == 16)
 		wav_buffer_available= 1;
 
 	avail_buffs = snd_pcm_avail(pcm_handle);
@@ -85,11 +77,20 @@ int alsa_update()
 		frames_requested =
 			(frames_requested > PERIOD_SIZE) ? PERIOD_SIZE : frames_requested;
 
-
 		if (!wav_buffer_available)
-			wav_buff_ptr= filler_buff+filler_index;
+			wav_buff_ptr= wav_buff[0]+filler_index;
 		else
-			wav_buff_ptr= wav_buff[0]+index;
+		{
+			wav_buff_ptr= wav_buff[1]+index;
+			// if ((frames_requested * FRAME_SIZE) + index > (wav_size[1]))
+			// {
+			// 	snd_pcm_sframes_t temp= ((wav_size[1] - index) / FRAME_SIZE) >> 3;
+			// 	temp= temp << 3;
+			// 	log_main("frames_requested_before=%u index=%u wav_size=%u frames_requested_after=%d",
+			// 		frames_requested, index, wav_size, temp);
+			// 	frames_requested= temp;
+			// }
+		}
 
 		frames_written = snd_pcm_writei(pcm_handle, wav_buff_ptr, frames_requested);
 
@@ -132,12 +133,12 @@ int alsa_update()
 		{
 			if (!wav_buffer_available)
 			{
-				if ((filler_index += (frames_requested * FRAME_SIZE)) >= 0x5000)
+				if ((filler_index += (frames_requested * FRAME_SIZE)) >= wav_size[0])
 					filler_index= FILLER_START;
 			}
 			else
 			{
-				if ((index += (frames_requested * FRAME_SIZE)) >= wav_size)
+				if ((index += (frames_requested * FRAME_SIZE)) >= wav_size[1])
 				{
 					// log_main("elapsed micros in play: %lld", (micros() - alsa_play_start_micros));
 					wav_buffer_available= 0;
@@ -209,8 +210,8 @@ int alsa_play(void)
 			 (frames_requested > PERIOD_SIZE) ? PERIOD_SIZE : frames_requested;
 
 		/* don't overrun wav file buffer */
-		frames_requested = (frames_requested * FRAME_SIZE + index > wav_size)
-									  ? (wav_size - index) / FRAME_SIZE
+		frames_requested = (frames_requested * FRAME_SIZE + index > wav_size[1])
+									  ? (wav_size[1] - index) / FRAME_SIZE
 									  : frames_requested;
 
 		// attempt to get rid of glitch at end of file
@@ -266,7 +267,7 @@ int alsa_play(void)
 
 		index += frames_requested * FRAME_SIZE;
 
-		if (index >= wav_size)
+		if (index >= wav_size[1])
 		{
 			printf("End of file\n");
 			log_main("elapsed micros in play: %lld", (micros() - alsa_play_start_micros));
@@ -300,7 +301,7 @@ int pcm_set_sw_params(snd_pcm_t *handle, snd_pcm_sw_params_t *params, int period
 
 	// set start threshold. make this equal to period size to avoid underrun during first playback
 	threshold = (period < 0) ? PERIOD_SIZE : period;
-	threshold /= 2;
+	threshold= 128; //5.8 millis
 	ret = snd_pcm_sw_params_set_start_threshold(handle, params, threshold);
 	if (ret)
 	{
@@ -511,7 +512,50 @@ int pcm_set_hw_params(snd_pcm_t *handle, snd_pcm_hw_params_t *params, int period
 	return 0;
 }
 
-int read_wav_file(char *wav_file)
+uint32_t parse_wav_header(uint8_t buffer_number)
+{
+	// wav format: https://docs.fileformat.com/audio/wav/
+	uint32_t i;
+	char chunkID[5]= {0};
+	uint32_t file_size= 0;
+	uint32_t data_size= 0;
+	uint16_t audio_format= 0; //PCM = 1
+   uint16_t number_of_channels= 0;
+   uint32_t sample_rate= 0; //check for 11025
+   // int byte_rate; //== SampleRate * NumChannels * BitsPerSample/8
+   // uint16_t block_align; //== NumChannels * BitsPerSample/8
+   uint16_t bits_per_sample= 0; //8 bits = 8, 16 bits = 16, etc.
+
+	for (i= 0 ; i < 4 ; i++)
+		chunkID[i]= wav_buff[buffer_number][i];
+	
+	for (i= 7 ; i >= 4 ; i--)
+		file_size= (file_size << 8) + wav_buff[buffer_number][i];
+
+	for (i= 21 ; i >= 20 ; i--)
+		audio_format= (audio_format << 8) + wav_buff[buffer_number][i];
+
+	for (i= 23 ; i >= 22 ; i--)
+		number_of_channels= (number_of_channels << 8) + wav_buff[buffer_number][i];
+
+	for (i= 27 ; i >= 24 ; i--)
+		sample_rate= (sample_rate << 8) + wav_buff[buffer_number][i];
+
+	for (i= 35 ; i >= 34 ; i--)
+		bits_per_sample= (bits_per_sample << 8) + wav_buff[buffer_number][i];
+
+	for (i= 43 ; i >= 40 ; i--)
+		data_size= (data_size << 8) + wav_buff[buffer_number][i];
+
+	printf("chunkID=%s file_size=%u format=%d chan=%u rate=%d bits=%d data_size=%d file_pad=%ld\n", 
+		chunkID, file_size, audio_format, number_of_channels, sample_rate, bits_per_sample, data_size,
+		(wav_size[buffer_number] - WAV_HEADER - data_size));
+
+	wav_size[buffer_number]= data_size+WAV_HEADER;
+	return 0;
+}
+
+int read_wav_file(char *wav_file, uint8_t buffer_number)
 {
 	int32_t bytes_read;
 
@@ -522,23 +566,18 @@ int read_wav_file(char *wav_file)
 		return -1;
 	}
 	fseek(wav_fd, 0, SEEK_END);
-	wav_size = ftell(wav_fd);
+	wav_size[buffer_number] = ftell(wav_fd);
 	rewind(wav_fd);
 
-	if (strstr(wav_file, "grey") != NULL)
-	{
-		bytes_read= fread(filler_buff, 1, wav_size, wav_fd);
-		printf("read %s\n", wav_file);
-	}
-	else
-		bytes_read= fread(wav_buff[0], 1, wav_size, wav_fd);
+	bytes_read= fread(wav_buff[buffer_number], 1, wav_size[buffer_number], wav_fd);
 
-	if (bytes_read != wav_size)
+	if (bytes_read != wav_size[buffer_number])
 	{
 		fprintf(stderr, "Error reading wave file\n");
 		return -1;
 	}
 	fclose(wav_fd);
+	parse_wav_header(buffer_number);
 	return 0;
 }
 
@@ -598,6 +637,14 @@ void alsa_deinit(void)
 }
 
 // --------------- common code
+
+void sleepMicros(uint32_t micros)
+{
+	struct timespec sleep;
+	sleep.tv_sec = micros / 1000000L;
+	sleep.tv_nsec = (micros % 1000000L) * 1000L;
+	while (nanosleep(&sleep, &sleep) && errno == EINTR);
+}
 
 uint64_t micros()
 {

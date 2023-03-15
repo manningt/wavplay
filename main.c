@@ -9,14 +9,6 @@
 
 #include "alsa_play.h"
 
-void sleepMicros(uint32_t micros)
-{
-	struct timespec sleep;
-	sleep.tv_sec = micros / 1000000L;
-	sleep.tv_nsec = (micros % 1000000L) * 1000L;
-	while (nanosleep(&sleep, &sleep) && errno == EINTR);
-}
-
 int main(int argc, char *argv[])
 {
 	char wav_file[96]= {0};
@@ -43,26 +35,28 @@ int main(int argc, char *argv[])
 		}
 	}
 
-	// if (read_wav_file("/home/pi/grey.wav") != 0)
+	if (1 && read_wav_file("/home/pi/grey.wav", 0) != 0)
+		exit(-1);
+	
+	// if (read_wav_file(wav_file, 1) != 0)
 	// 	exit(-1);
-
-	if (read_wav_file(wav_file) != 0)
+	if (read_wav_file("/home/pi/repos/audio/one.wav", 1) != 0)
+		exit(-1);
+	if (read_wav_file("/home/pi/repos/audio/point.wav", 2) != 0)
 		exit(-1);
 
 	if (alsa_init(alsa_device, period) != 0)
 		exit(-1);
 
-	int i;
-	for (i = 0; i < 64; i++)
+	int i=0;
+	for (; i < 63; i++)
 	{
 		alsa_update();
 		sleepMicros(25000);
 	}
-	printf("sleeping...\n");
-	sleepMicros(4000000);
 
-	// alsa_play();
-	// printf("between plays\n");
+	// printf("sleeping...\n");
+	// sleepMicros(2000000);
 	// alsa_play();
 	alsa_deinit();
 
