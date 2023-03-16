@@ -31,22 +31,19 @@ static snd_pcm_t *pcm_handle;
 uint32_t wav_size[NUMBER_OF_BUFFERS];
 char wav_buff[NUMBER_OF_BUFFERS][BUFFER_SIZE]= {0};
 
-uint8_t wav_buffer_available= 0;
-
 int alsa_update()
 {
 	int ret;
 	int avail_buffs;
 	bool err = false;
-	char *wav_buff_ptr;
 	snd_pcm_sframes_t frames_requested, frames_written;
 	uint32_t frames_written_count=0;
 	uint8_t loop_count=0;
 
-	static uint32_t index[4]= {WAV_HEADER, WAV_HEADER, WAV_HEADER, WAV_HEADER}; // skip header and start at PCM data
+	static uint32_t current_wav_position[4]= {WAV_HEADER, WAV_HEADER, WAV_HEADER, WAV_HEADER}; // skip header and start at PCM data
 	static uint32_t call_count=0;
 	static uint32_t total_frames_written_count=0;
-	static uint8_t buffer_playing;
+	static uint8_t buffer_being_written;
 
 	ret = snd_pcm_wait(pcm_handle, 1000); // returns 1 normally
 	if (ret == 0)
@@ -60,8 +57,11 @@ int alsa_update()
 		return ret;
 	}
 
+	if (call_count == 0)
+		buffer_being_written= 0;
+
 	if (call_count == 16)
-		wav_buffer_available= 1;
+		buffer_being_written= 1;
 
 	avail_buffs = snd_pcm_avail(pcm_handle);
 	while (avail_buffs >= (IDLE_FRAMES_AVAILABLE - (4 * PERIOD_SIZE)))
@@ -77,22 +77,7 @@ int alsa_update()
 		frames_requested =
 			(frames_requested > PERIOD_SIZE) ? PERIOD_SIZE : frames_requested;
 
-		//!! change the following to use: wav_buff[buffer_playing] + index[buffer_playing]
-		if (!wav_buffer_available)
-			wav_buff_ptr= wav_buff[0]+index[0];
-		else
-		{
-			wav_buff_ptr= wav_buff[1]+index[1];
-			// if ((frames_requested * FRAME_SIZE) + index > (wav_size[1]))
-			// {
-			// 	snd_pcm_sframes_t temp= ((wav_size[1] - index) / FRAME_SIZE) >> 3;
-			// 	temp= temp << 3;
-			// 	log_main("frames_requested_before=%u index=%u wav_size=%u frames_requested_after=%d",
-			// 		frames_requested, index, wav_size, temp);
-			// 	frames_requested= temp;
-			// }
-		}
-
+		char *wav_buff_ptr= wav_buff[buffer_being_written]+current_wav_position[buffer_being_written];
 		frames_written = snd_pcm_writei(pcm_handle, wav_buff_ptr, frames_requested);
 
 		if (frames_written == -EAGAIN)
@@ -132,18 +117,18 @@ int alsa_update()
 		}
 		else 
 		{
-			if (!wav_buffer_available)
+			current_wav_position[buffer_being_written] += (frames_written * FRAME_SIZE);
+			if (current_wav_position[0] >= wav_size[0])
+				current_wav_position[0]= WAV_HEADER;
+			else if (current_wav_position[1] >= wav_size[1])
 			{
-				if ((index[0] += (frames_requested * FRAME_SIZE)) >= wav_size[0])
-					index[0]= WAV_HEADER;
+				buffer_being_written= 2;
+				// current_wav_position[0]= WAV_HEADER;
 			}
-			else
+			else if (current_wav_position[2] >= wav_size[2])
 			{
-				if ((index[1] += (frames_requested * FRAME_SIZE)) >= wav_size[1])
-				{
-					// log_main("elapsed micros in play: %lld", (micros() - alsa_play_start_micros));
-					wav_buffer_available= 0;
-				}
+				buffer_being_written= 0;
+				// current_wav_position[0]= WAV_HEADER;
 			}
 		}
 
@@ -157,9 +142,9 @@ int alsa_update()
 	
 	call_count++;
 	total_frames_written_count += frames_written_count;
-	log_main("call_count=%u total_frames=%u avail=%u playing_wav=%u index=%d state=%s",
-   	call_count, total_frames_written_count, avail_buffs, wav_buffer_available,
-		index, snd_pcm_state_name(snd_pcm_state(pcm_handle)));
+	log_main("call_count=%u total_frames=%u frames_written=%u avail=%u playing_wav=%u wav_position=%d", // state=%s",
+   	call_count, total_frames_written_count, frames_written, avail_buffs, buffer_being_written,
+		current_wav_position[buffer_being_written]); //, snd_pcm_state_name(snd_pcm_state(pcm_handle)));
 
 	return err;
 }
@@ -608,7 +593,19 @@ int read_wav_file(char *wav_file, uint8_t buffer_number)
 	data_size= parse_wav_header(buffer_number);
 	if (data_size <= 0)
 		return -1;
-	wav_size[buffer_number]= (uint32_t) data_size;
+	
+	uint32_t remainder= data_size % (PERIOD_SIZE * FRAME_SIZE);
+	uint32_t bytes_to_add= 0;
+	if (remainder != 0)
+	{
+		bytes_to_add= (PERIOD_SIZE * FRAME_SIZE) - remainder; //round up to the nearest buffer size
+		memset(wav_buff[buffer_number]+remainder, 0, bytes_to_add); //clear the remaining bytes in the buffer
+	}
+
+	wav_size[buffer_number]= (uint32_t) data_size + bytes_to_add;
+	printf("file=%s: data_size=%u remainder=%u added_bytes=%u final_size=%u\n", 
+		wav_file, data_size, remainder, bytes_to_add, wav_size[buffer_number]);
+
 	return 0;
 }
 
