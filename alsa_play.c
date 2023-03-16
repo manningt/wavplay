@@ -27,8 +27,9 @@
 
 static snd_pcm_t *pcm_handle;
 #define NUMBER_OF_BUFFERS 4
-long wav_size[NUMBER_OF_BUFFERS];
-char wav_buff[NUMBER_OF_BUFFERS][200000]= {0};
+#define BUFFER_SIZE 200000
+uint32_t wav_size[NUMBER_OF_BUFFERS];
+char wav_buff[NUMBER_OF_BUFFERS][BUFFER_SIZE]= {0};
 
 uint8_t wav_buffer_available= 0;
 
@@ -42,9 +43,10 @@ int alsa_update()
 	uint32_t frames_written_count=0;
 	uint8_t loop_count=0;
 
-	static int index[4]= {WAV_HEADER, WAV_HEADER, WAV_HEADER, WAV_HEADER}; // skip header and start at PCM data
+	static uint32_t index[4]= {WAV_HEADER, WAV_HEADER, WAV_HEADER, WAV_HEADER}; // skip header and start at PCM data
 	static uint32_t call_count=0;
 	static uint32_t total_frames_written_count=0;
+	static uint8_t buffer_playing;
 
 	ret = snd_pcm_wait(pcm_handle, 1000); // returns 1 normally
 	if (ret == 0)
@@ -75,6 +77,7 @@ int alsa_update()
 		frames_requested =
 			(frames_requested > PERIOD_SIZE) ? PERIOD_SIZE : frames_requested;
 
+		//!! change the following to use: wav_buff[buffer_playing] + index[buffer_playing]
 		if (!wav_buffer_available)
 			wav_buff_ptr= wav_buff[0]+index[0];
 		else
@@ -514,7 +517,7 @@ int pcm_set_hw_params(snd_pcm_t *handle, snd_pcm_hw_params_t *params, int period
 	return 0;
 }
 
-uint32_t parse_wav_header(uint8_t buffer_number)
+int32_t parse_wav_header(uint8_t buffer_number)
 {
 	// wav format: https://docs.fileformat.com/audio/wav/
 	uint32_t i;
@@ -549,37 +552,63 @@ uint32_t parse_wav_header(uint8_t buffer_number)
 	for (i= 43 ; i >= 40 ; i--)
 		data_size= (data_size << 8) + wav_buff[buffer_number][i];
 
-	printf("chunkID=%s file_size=%u format=%d chan=%u rate=%d bits=%d data_size=%d file_pad=%ld\n", 
-		chunkID, file_size, audio_format, number_of_channels, sample_rate, bits_per_sample, data_size,
-		(wav_size[buffer_number] - WAV_HEADER - data_size));
+	// log_main("chunkID=%s file_size=%u format=%d chan=%u rate=%d bits=%d data_size=%d file_pad=%ld", 
+	// chunkID, file_size, audio_format, number_of_channels, sample_rate, bits_per_sample, data_size,
+	// (wav_size[buffer_number] - WAV_HEADER - data_size));
 
-	wav_size[buffer_number]= data_size+WAV_HEADER;
-	return 0;
+	if (strncmp(chunkID, "RIFF", 4) != 0)
+	{
+		log_main("Not a WAV file: first 4 characters=%s instead of RIFF", chunkID);
+		return -1;
+	}
+
+	if (audio_format != 1 || number_of_channels != 1 || sample_rate != 11025 || bits_per_sample != 16)
+	{
+		log_main("Unsupported wav format: format=%d channels=%u sample_rate=%d bits_per_sample=%d", 
+			audio_format, number_of_channels, sample_rate, bits_per_sample);
+		return -1;
+	}
+
+	return data_size;
 }
 
 int read_wav_file(char *wav_file, uint8_t buffer_number)
 {
-	int32_t bytes_read;
-
+	uint32_t bytes_read;
+	int32_t data_size;
+	
 	FILE *wav_fd = fopen(wav_file, "rb");
 	if (wav_fd == NULL)
 	{
-		fprintf(stderr, "Error opening file=%s\n", wav_file);
+		log_main("Error opening file=%s\n", wav_file);
 		return -1;
 	}
+
 	fseek(wav_fd, 0, SEEK_END);
 	wav_size[buffer_number] = ftell(wav_fd);
 	rewind(wav_fd);
+	if (wav_size[buffer_number] >= BUFFER_SIZE)
+	{
+		log_main("Error: file=%s larger than buffer; file_size=%u buffer_size=%u",
+			wav_file, wav_size[buffer_number], BUFFER_SIZE);
+		fclose(wav_fd);
+		return -1;
+	}
 
 	bytes_read= fread(wav_buff[buffer_number], 1, wav_size[buffer_number], wav_fd);
-
 	if (bytes_read != wav_size[buffer_number])
 	{
-		fprintf(stderr, "Error reading wave file\n");
+		log_main("Error reading file=%s: file_size=%u bytes_read=%u reading wave file, bytes_read=",
+			wav_file, wav_size[buffer_number], bytes_read);
+		fclose(wav_fd);
 		return -1;
 	}
 	fclose(wav_fd);
-	parse_wav_header(buffer_number);
+
+	data_size= parse_wav_header(buffer_number);
+	if (data_size <= 0)
+		return -1;
+	wav_size[buffer_number]= (uint32_t) data_size;
 	return 0;
 }
 
