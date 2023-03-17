@@ -28,7 +28,7 @@
 static snd_pcm_t *pcm_handle;
 #define NUMBER_OF_BUFFERS 4
 #define BUFFER_SIZE 200000
-uint32_t wav_size[NUMBER_OF_BUFFERS];
+uint32_t wav_size[NUMBER_OF_BUFFERS]= {0};
 char wav_buff[NUMBER_OF_BUFFERS][BUFFER_SIZE]= {0};
 
 int alsa_update()
@@ -45,6 +45,10 @@ int alsa_update()
 	static uint32_t total_frames_written_count=0;
 	static uint8_t buffer_being_written;
 
+	//wav_size is zero if gray noise is not loaded, so play silence (zeroes) instead
+	if (wav_size[0] == 0)
+		wav_size[0]= PERIOD_SIZE * FRAME_SIZE * 2;
+
 	ret = snd_pcm_wait(pcm_handle, 1000); // returns 1 normally
 	if (ret == 0)
 	{
@@ -60,8 +64,11 @@ int alsa_update()
 	if (call_count == 0)
 		buffer_being_written= 0;
 
-	if (call_count == 16)
-		buffer_being_written= 1;
+	// if (call_count == 5)
+	// 	buffer_being_written= 1;
+
+	// if (call_count == 36) //can't be a divisible by 4?
+	// 	buffer_being_written= 2;
 
 	avail_buffs = snd_pcm_avail(pcm_handle);
 	while (avail_buffs >= (IDLE_FRAMES_AVAILABLE - (4 * PERIOD_SIZE)))
@@ -118,17 +125,17 @@ int alsa_update()
 		else 
 		{
 			current_wav_position[buffer_being_written] += (frames_written * FRAME_SIZE);
-			if (current_wav_position[0] >= wav_size[0])
-				current_wav_position[0]= WAV_HEADER;
-			else if (current_wav_position[1] >= wav_size[1])
+			if (current_wav_position[buffer_being_written] >= wav_size[buffer_being_written])
 			{
-				buffer_being_written= 2;
-				// current_wav_position[0]= WAV_HEADER;
-			}
-			else if (current_wav_position[2] >= wav_size[2])
-			{
-				buffer_being_written= 0;
-				// current_wav_position[0]= WAV_HEADER;
+				current_wav_position[buffer_being_written]= WAV_HEADER;
+				if (buffer_being_written == 0)
+					buffer_being_written= 1;
+				else if (buffer_being_written == 1)
+					buffer_being_written= 2;
+				else if (buffer_being_written == 2)
+					buffer_being_written= 3;
+				else 
+					buffer_being_written= 0;
 			}
 		}
 
@@ -602,7 +609,7 @@ int read_wav_file(char *wav_file, uint8_t buffer_number)
 		memset(wav_buff[buffer_number]+remainder, 0, bytes_to_add); //clear the remaining bytes in the buffer
 	}
 
-	wav_size[buffer_number]= (uint32_t) data_size + bytes_to_add;
+	wav_size[buffer_number]= (uint32_t) data_size - remainder; // + bytes_to_add;
 	printf("file=%s: data_size=%u remainder=%u added_bytes=%u final_size=%u\n", 
 		wav_file, data_size, remainder, bytes_to_add, wav_size[buffer_number]);
 

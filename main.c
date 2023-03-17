@@ -11,17 +11,29 @@
 
 int main(int argc, char *argv[])
 {
-	char wav_file[96]= {0};
+	char wav_file[3][96]= {0};
 	char alsa_device[36]= "bluealsa:DEV=F4:4E:FD:00:65:5E";
 	int opt;
 	int period = -1;
+	short gray_noise= 0; //defaults to silence
+	short i;
 
-	while ((opt = getopt(argc, argv, "f:d:p:")) != -1)
+
+	while ((opt = getopt(argc, argv, "ga:b:c:d:p:")) != -1)
 	{
 		switch (opt)
 		{
-		case 'f':
-			strcpy(wav_file, optarg);
+		case 'g':
+			gray_noise= 1;
+			break;
+		case 'a':
+			strcpy(wav_file[0], optarg);
+			break;
+		case 'b':
+			strcpy(wav_file[1], optarg);
+			break;
+		case 'c':
+			strcpy(wav_file[2], optarg);
 			break;
 		case 'p':
 			period = atoi(optarg);
@@ -35,21 +47,17 @@ int main(int argc, char *argv[])
 		}
 	}
 
-	if (1 && read_wav_file("/home/pi/grey.wav", 0) != 0)
+	if (gray_noise && read_wav_file("/home/pi/grey.wav", 0) != 0)
 		exit(-1);
 	
-	// if (read_wav_file(wav_file, 1) != 0)
-	// 	exit(-1);
-	if (read_wav_file("/home/pi/repos/audio/one.wav", 1) != 0)
-		exit(-1);
-	if (read_wav_file("/home/pi/repos/audio/point.wav", 2) != 0)
-		exit(-1);
+	for (i=0; i < 3;i++)
+		if (read_wav_file(wav_file[i], i) != 0)
+			exit(-1);
 
 	if (alsa_init(alsa_device, period) != 0)
 		exit(-1);
 
-	int i=0;
-	for (; i < 63; i++)
+	for (i=0; i < 65; i++)
 	{
 		alsa_update();
 		sleepMicros(25000);
