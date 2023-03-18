@@ -48,11 +48,11 @@ int alsa_update()
 	static uint8_t previous_buffer_being_written=0;
 	static bool done= false;
 
-	//wav_size is zero if gray noise is not loaded, so play silence (zeroes) instead
-	if (wav_size[0] == 0)
-		wav_size[0]= PERIOD_SIZE * FRAME_SIZE * 4;
 	if (call_count == 0)
+	{
 		buffer_being_written= 0;
+		wav_size[0]= PERIOD_SIZE * FRAME_SIZE * 8; //reduce silence or grey to 44 mSec
+	}
 
 	ret = snd_pcm_wait(pcm_handle, 1000); // returns 1 normally
 	if (ret == 0)
@@ -558,9 +558,9 @@ int alsa_init(char *device_name, int period)
 
 void alsa_deinit(void)
 {
-	uint64_t before_drain_micros = micros();
+	// uint64_t before_drain_micros = micros();
 	snd_pcm_drain(pcm_handle);
-	log_main("drain_micros=%llu", micros() - before_drain_micros);
+	// log_main("drain_micros=%llu", micros() - before_drain_micros);
 	snd_pcm_close(pcm_handle);
 }
 

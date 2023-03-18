@@ -59,7 +59,8 @@ int main(int argc, char *argv[])
 
 	for (i=0; i < 200; i++)
 	{
-		alsa_update();
+		if (alsa_update() < 0)
+			exit(1);
 		sleepMicros(9000);
 	}
 
