@@ -51,16 +51,16 @@ int main(int argc, char *argv[])
 		exit(-1);
 	
 	for (i=0; i < 3;i++)
-		if (read_wav_file(wav_file[i], i) != 0)
+		if (read_wav_file(wav_file[i], i+1) != 0)
 			exit(-1);
 
 	if (alsa_init(alsa_device, period) != 0)
 		exit(-1);
 
-	for (i=0; i < 65; i++)
+	for (i=0; i < 200; i++)
 	{
 		alsa_update();
-		sleepMicros(25000);
+		sleepMicros(9000);
 	}
 
 	// printf("sleeping...\n");

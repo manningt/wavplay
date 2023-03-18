@@ -15,15 +15,15 @@
 #define WAV_HEADER 44
 #define SAMPLE_SIZE 2
 #define NUM_CHANNELS 1
-#define WAV_FILE_RATE 11025
+#define WAV_SAMPLE_RATE 11025
 #define FRAME_SIZE (SAMPLE_SIZE * NUM_CHANNELS)
-#define PERIOD_SIZE 240
-#define BUFFER_SIZE_MULTIPLIER 20
-#define IDLE_FRAMES_AVAILABLE 4800 //found by experiment when period was 240
-// 4800 (idle buffers) - 960 (43 mSec) = 3840
-
 // data rate = channels * audio sample * rate = 22050
 // interrupt period = period size * frame size / data rate = 240*(2/22050) = 21.768 millis
+#define PERIOD_SIZE 120
+#define ALSA_BUFFER_SIZE_MULTIPLIER 20 //has to be at least 20
+#define IDLE_FRAMES_AVAILABLE (PERIOD_SIZE * ALSA_BUFFER_SIZE_MULTIPLIER)
+
+#define PERIODS_TO_WRITE 2 //2 periods = 43 mSec of latency
 
 static snd_pcm_t *pcm_handle;
 #define NUMBER_OF_BUFFERS 4
@@ -39,15 +39,20 @@ int alsa_update()
 	snd_pcm_sframes_t frames_requested, frames_written;
 	uint32_t frames_written_count=0;
 	uint8_t loop_count=0;
+	uint32_t previous_buffer_position;
 
 	static uint32_t current_wav_position[4]= {WAV_HEADER, WAV_HEADER, WAV_HEADER, WAV_HEADER}; // skip header and start at PCM data
 	static uint32_t call_count=0;
 	static uint32_t total_frames_written_count=0;
-	static uint8_t buffer_being_written;
+	static uint8_t buffer_being_written=0;
+	static uint8_t previous_buffer_being_written=0;
+	static bool done= false;
 
 	//wav_size is zero if gray noise is not loaded, so play silence (zeroes) instead
 	if (wav_size[0] == 0)
-		wav_size[0]= PERIOD_SIZE * FRAME_SIZE * 2;
+		wav_size[0]= PERIOD_SIZE * FRAME_SIZE * 4;
+	if (call_count == 0)
+		buffer_being_written= 0;
 
 	ret = snd_pcm_wait(pcm_handle, 1000); // returns 1 normally
 	if (ret == 0)
@@ -61,17 +66,8 @@ int alsa_update()
 		return ret;
 	}
 
-	if (call_count == 0)
-		buffer_being_written= 0;
-
-	// if (call_count == 5)
-	// 	buffer_being_written= 1;
-
-	// if (call_count == 36) //can't be a divisible by 4?
-	// 	buffer_being_written= 2;
-
 	avail_buffs = snd_pcm_avail(pcm_handle);
-	while (avail_buffs >= (IDLE_FRAMES_AVAILABLE - (4 * PERIOD_SIZE)))
+	while (avail_buffs >= (IDLE_FRAMES_AVAILABLE - (2 * PERIOD_SIZE))) 
 	{
 		frames_requested = snd_pcm_avail_update(pcm_handle);
 		if (frames_requested < 0)
@@ -125,18 +121,29 @@ int alsa_update()
 		else 
 		{
 			current_wav_position[buffer_being_written] += (frames_written * FRAME_SIZE);
-			if (current_wav_position[buffer_being_written] >= wav_size[buffer_being_written])
+			if (current_wav_position[buffer_being_written] >= wav_size[buffer_being_written] && !done)
 			{
-				current_wav_position[buffer_being_written]= WAV_HEADER;
+				previous_buffer_position= current_wav_position[buffer_being_written];
+				current_wav_position[buffer_being_written]= WAV_HEADER; //
 				if (buffer_being_written == 0)
 					buffer_being_written= 1;
 				else if (buffer_being_written == 1)
 					buffer_being_written= 2;
 				else if (buffer_being_written == 2)
 					buffer_being_written= 3;
-				else 
+				else
+				{
 					buffer_being_written= 0;
+					done= true;
+				}
 			}
+			if (previous_buffer_being_written != buffer_being_written)
+			{
+				log_main("calls=%u frames: written=%u total=%u avail=%u  buffer: writing=%u prev_ending_position=%d",
+					call_count, frames_written, total_frames_written_count, avail_buffs, buffer_being_written,
+					previous_buffer_position);
+			}
+			previous_buffer_being_written= buffer_being_written;
 		}
 
 		frames_written_count += frames_written;
@@ -149,127 +156,13 @@ int alsa_update()
 	
 	call_count++;
 	total_frames_written_count += frames_written_count;
-	log_main("call_count=%u total_frames=%u frames_written=%u avail=%u playing_wav=%u wav_position=%d", // state=%s",
-   	call_count, total_frames_written_count, frames_written, avail_buffs, buffer_being_written,
-		current_wav_position[buffer_being_written]); //, snd_pcm_state_name(snd_pcm_state(pcm_handle)));
+	// log_main("calls=%u frames: written=%u total=%u avail=%u  buffer: writing=%u ending_position=%d", // state=%s",
+   // 	call_count, frames_written, total_frames_written_count, avail_buffs, buffer_being_written,
+	// 	current_wav_position[buffer_being_written]); //, snd_pcm_state_name(snd_pcm_state(pcm_handle)));
 
 	return err;
 }
-/*
-int alsa_play(void)
-{
-	printf("Starting alsa_play");
-	uint64_t alsa_play_start_micros = micros();
 
-	int frame_count = 0;
-	int ret = 0;
-	int index = WAV_HEADER; // skip header and start at PCM data
-	snd_pcm_sframes_t frames_requested, frames_written;
-
-	while (1)
-	{
-		frame_count++;
-		ret = snd_pcm_wait(pcm_handle, 1000); // returns 1 normally
-		if (ret == 0)
-		{
-			fprintf(stderr, "PCM timeout occurred\n");
-			return -1;
-		}
-		else if (ret < 0)
-		{
-			fprintf(stderr, "PCM device error: %s\n", snd_strerror(ret));
-			return ret;
-		}
-
-		frames_requested = snd_pcm_avail_update(pcm_handle);
-		if (frames_requested < 0)
-		{
-			fprintf(stderr, "PCM error requesting frames: %s\n",
-					  snd_strerror(ret));
-			return ret;
-		}
-
-		int avail = snd_pcm_avail(pcm_handle);
-		// if (avail < 1200)
-		// {
-		// 	int sleep_time = 24000;
-		// 	log_main("sleeping %d micros", sleep_time);
-		// 	sleepMicros(sleep_time);
-		// 	continue;
-		// }
-
-		// deliver data one period at a time 
-		frames_requested =
-			 (frames_requested > PERIOD_SIZE) ? PERIOD_SIZE : frames_requested;
-
-		// don't overrun wav file buffer 
-		frames_requested = (frames_requested * FRAME_SIZE + index > wav_size[1])
-									  ? (wav_size[1] - index) / FRAME_SIZE
-									  : frames_requested;
-
-		// attempt to get rid of glitch at end of file
-		// #define LAST_WRITE_SIZE 16
-		// if (frames_requested < 50)
-		//     frames_requested= LAST_WRITE_SIZE;
-		frames_written = snd_pcm_writei(pcm_handle, &wav_buff[0][index], frames_requested);
-
-		log_main("frame_write_count=%u  frames_written=%u; avail=%u",
-					frame_count, frames_written, avail); // avail_delay);
-
-		if (frames_written == -EAGAIN)
-		{
-			continue;
-		}
-		// attempt to get rid of glitch at end of file
-		// if (frames_written == LAST_WRITE_SIZE) {
-		//     log_main("early return.");
-		//     return -1;
-		// }
-
-		if (frames_written == -EPIPE)
-		{ // underrun
-			fprintf(stderr, "PCM write error: Underrun event\n");
-			frames_written = snd_pcm_prepare(pcm_handle);
-			if (frames_written < 0)
-			{
-				fprintf(stderr,
-						  "Can't recover from underrun, prepare failed: %s\n",
-						  snd_strerror(frames_written));
-				return frames_written;
-			}
-		}
-		else if (frames_written == -ESTRPIPE)
-		{
-			fprintf(stderr, "PCM write error: Stream is suspended\n");
-			while ((frames_written = snd_pcm_resume(pcm_handle)) == -EAGAIN)
-			{
-				sleep(1); // wait until the suspend flag is released
-			}
-			if (frames_written < 0)
-			{
-				frames_written = snd_pcm_prepare(pcm_handle);
-				if (frames_written < 0)
-				{
-					fprintf(stderr,
-							  "Can' recover from suspend, prepare failed: %s\n",
-							  snd_strerror(frames_written));
-					return frames_written;
-				}
-			}
-		}
-
-		index += frames_requested * FRAME_SIZE;
-
-		if (index >= wav_size[1])
-		{
-			printf("End of file\n");
-			log_main("elapsed micros in play: %lld", (micros() - alsa_play_start_micros));
-			return 0;
-		}
-	}
-	return -1; // we should never get here
-}
-*/
 
 int pcm_set_sw_params(snd_pcm_t *handle, snd_pcm_sw_params_t *params, int period)
 {
@@ -437,7 +330,7 @@ int pcm_set_hw_params(snd_pcm_t *handle, snd_pcm_hw_params_t *params, int period
 	}
 
 	// set playback rate
-	unsigned int requested_rate= WAV_FILE_RATE;
+	unsigned int requested_rate= WAV_SAMPLE_RATE;
 	unsigned int set_rate= requested_rate;
 	ret = snd_pcm_hw_params_set_rate_near(handle, params, &set_rate, 0);
 	if (ret)
@@ -465,7 +358,7 @@ int pcm_set_hw_params(snd_pcm_t *handle, snd_pcm_hw_params_t *params, int period
 	}
 	// printf("Period size set to %lu frames\n", period_size);
 
-	buffer_size = (period < 0) ? (BUFFER_SIZE_MULTIPLIER * PERIOD_SIZE) : (BUFFER_SIZE_MULTIPLIER * period);
+	buffer_size = (period < 0) ? (ALSA_BUFFER_SIZE_MULTIPLIER * PERIOD_SIZE) : (ALSA_BUFFER_SIZE_MULTIPLIER * period);
 	ret = snd_pcm_hw_params_set_buffer_size(handle, params, buffer_size);
 	if (ret)
 	{
@@ -554,7 +447,7 @@ int32_t parse_wav_header(uint8_t buffer_number)
 		return -1;
 	}
 
-	if (audio_format != 1 || number_of_channels != 1 || sample_rate != 11025 || bits_per_sample != 16)
+	if (audio_format != 1 || number_of_channels != NUM_CHANNELS || sample_rate != WAV_SAMPLE_RATE || bits_per_sample != 16)
 	{
 		log_main("Unsupported wav format: format=%d channels=%u sample_rate=%d bits_per_sample=%d", 
 			audio_format, number_of_channels, sample_rate, bits_per_sample);
