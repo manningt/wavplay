@@ -6,3 +6,4 @@
 build
 timer_example_mine.c
 .vscode
+*.txt
