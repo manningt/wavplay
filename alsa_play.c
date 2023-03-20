@@ -12,20 +12,23 @@
 
 #define PCM_DEVICE "hw:1,0"
 
-#define WAV_HEADER 44
-#define SAMPLE_SIZE 1
+// #define U8
+#ifdef U8
+	#define BITS_PER_SAMPLE 8
+	#define PCM_FORMAT SND_PCM_FORMAT_U8
+#else
+	#define BITS_PER_SAMPLE 16
+	#define PCM_FORMAT SND_PCM_FORMAT_S16
+#endif
+
 #define NUM_CHANNELS 1
 #define WAV_SAMPLE_RATE 11025
-#define BITS_PER_SAMPLE 8
-// #define ENCODING "u8"
-#define FRAME_SIZE (SAMPLE_SIZE * NUM_CHANNELS)
-// data rate = channels * audio sample * rate = 22050
-// interrupt period = period size * frame size / data rate = 240*(2/22050) = 21.768 millis
+#define FRAME_SIZE (BITS_PER_SAMPLE/8 * NUM_CHANNELS)
 #define PERIOD_SIZE 120
+// data rate = channels * bits_per_sample/8 * sample_rate * BITS_PER_SAMPLE/2 = 22050 (S16 format)
+// ?? interrupt period = period size * (BITS_PER_SAMPLE/8 * NUM_CHANNELS) / data rate =120*2/22050 = 2.721 millis
 #define ALSA_BUFFER_SIZE_MULTIPLIER 20 //has to be at least 20
 #define IDLE_FRAMES_AVAILABLE (PERIOD_SIZE * ALSA_BUFFER_SIZE_MULTIPLIER)
-
-#define PERIODS_TO_WRITE 2 //2 periods = 43 mSec of latency
 
 static snd_pcm_t *pcm_handle;
 #define NUMBER_OF_BUFFERS 4
@@ -82,8 +85,7 @@ int alsa_update()
 			err = true;
 			return -1;
 		}
-		frames_requested =
-			(frames_requested > PERIOD_SIZE) ? PERIOD_SIZE : frames_requested;
+		frames_requested= (frames_requested > PERIOD_SIZE) ? PERIOD_SIZE : frames_requested;
 
 		char *wav_buff_ptr= wav_buff[buffer_being_written]+current_buffer_position[buffer_being_written];
 		frames_written = snd_pcm_writei(pcm_handle, wav_buff_ptr, frames_requested);
@@ -130,13 +132,8 @@ int alsa_update()
 			{
 				previous_buffer_position= current_buffer_position[buffer_being_written];
 				current_buffer_position[buffer_being_written]= wav_data_start[buffer_being_written];
-				if (buffer_being_written == 0)
-					buffer_being_written= 1;
-				else if (buffer_being_written == 1)
-					buffer_being_written= 2;
-				else if (buffer_being_written == 2)
-					buffer_being_written= 3;
-				else
+				buffer_being_written++;
+				if (wav_data_size[buffer_being_written] == 0)
 				{
 					buffer_being_written= 0;
 					done= true;
@@ -304,7 +301,7 @@ int pcm_set_hw_params(snd_pcm_t *handle, snd_pcm_hw_params_t *params, int period
 		return ret;
 	}
 
-	ret = snd_pcm_hw_params_set_format(handle, params, SND_PCM_FORMAT_S16);
+	ret = snd_pcm_hw_params_set_format(handle, params, PCM_FORMAT);
 	if (ret)
 	{
 		fprintf(stderr, "Sample format not available: %s\n", snd_strerror(ret));
@@ -409,8 +406,8 @@ int pcm_set_hw_params(snd_pcm_t *handle, snd_pcm_hw_params_t *params, int period
 
 int32_t parse_wav_header(uint8_t buffer_number)
 {
-	// wav format: https://docs.fileformat.com/audio/wav/
-	// there are potentially 2 chunks between the WAVEfmt chunk and the data chunk: LIST and fact
+	// wav format: https://www.videoproc.com/resource/wav-file.htm
+	// there are potentially 1 or more chunks between the WAVEfmt chunk and the data chunk: LIST and fact
 	uint32_t i, j, k;
 	char chunkID[4][5]= {0}; //using 1 based, so chunkID[0] is unused
 	uint32_t file_size= 0;

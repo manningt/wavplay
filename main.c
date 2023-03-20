@@ -51,7 +51,7 @@ int main(int argc, char *argv[])
 		exit(-1);
 	
 	for (i=0; i < 3;i++)
-		if (read_wav_file(wav_file[i], i+1) != 0)
+		if ((wav_file[i][0] != 0) && (read_wav_file(wav_file[i], i+1) != 0))
 			exit(-1);
 
 	if (alsa_init(alsa_device, period) != 0)
