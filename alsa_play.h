@@ -1,6 +1,7 @@
 #ifndef ALSA_PLAY_H
 #define ALSA_PLAY_H
 #include <stdint.h>
+#include <stdbool.h>
 
 int alsa_play(void);
 int alsa_init(char *device_name, int period);
@@ -8,7 +9,9 @@ void alsa_deinit(void);
 int alsa_update(void);
 int read_wav_file(char *wav_file, uint8_t buffer_number);
 
-extern uint8_t wav_buffer_available;
+extern bool queue_mode;
+extern bool wav_buffer_ready;
+extern bool wav_buffer_done;
 
 #define FOREACH_BUFFER_TYPE(BUFFER_TYPE_NAME) \
 	BUFFER_TYPE_NAME(FILL) \

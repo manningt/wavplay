@@ -19,12 +19,15 @@ int main(int argc, char *argv[])
 	short i;
 
 
-	while ((opt = getopt(argc, argv, "ga:b:c:d:p:")) != -1)
+	while ((opt = getopt(argc, argv, "gqa:b:c:d:p:")) != -1)
 	{
 		switch (opt)
 		{
 		case 'g':
 			gray_noise= 1;
+			break;
+		case 'q':
+			queue_mode= 1;
 			break;
 		case 'a':
 			strcpy(wav_file[0], optarg);
@@ -57,11 +60,26 @@ int main(int argc, char *argv[])
 	if (alsa_init(alsa_device, period) != 0)
 		exit(-1);
 
-	for (i=0; i < 200; i++)
+	for (i=0; i < 300; i++)
 	{
 		if (alsa_update() < 0)
 			exit(1);
 		sleepMicros(9000);
+		if (queue_mode)
+		{
+			if (i == 30 || i == 120)
+			{
+				wav_buffer_ready= 1; //start
+				wav_buffer_done= 0;
+			}
+			// the following is for back-to-back plays:
+			// if (wav_buffer_done)
+			// {
+			// 	printf("restarting buffer load on count=%u",i);
+			// 	wav_buffer_ready= 1;
+			// 	wav_buffer_done= 0;
+			// }
+		}
 	}
 
 	// printf("sleeping...\n");

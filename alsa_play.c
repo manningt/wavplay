@@ -37,6 +37,11 @@ uint32_t wav_data_size[NUMBER_OF_BUFFERS]= {0};
 uint32_t wav_data_start[NUMBER_OF_BUFFERS]= {0};
 char wav_buff[NUMBER_OF_BUFFERS][BUFFER_SIZE]= {0};
 
+bool wav_buffer_ready;
+bool wav_buffer_in_progress;
+bool wav_buffer_done;
+bool queue_mode= false;
+
 int alsa_update()
 {
 	int ret;
@@ -56,10 +61,20 @@ int alsa_update()
 
 	if (call_count == 0)
 	{
-		buffer_being_written= 0;
+		buffer_being_written= FILL;
 		wav_data_size[0]= PERIOD_SIZE * FRAME_SIZE * 8; //reduce silence or grey to 44 mSec
-		for (loop_count=0; loop_count < NUMBER_OF_BUFFERS; loop_count++)
-			current_buffer_position[loop_count]= wav_data_start[loop_count];
+		if (!queue_mode)
+			for (loop_count=0; loop_count < NUMBER_OF_BUFFERS; loop_count++)
+				current_buffer_position[loop_count]= wav_data_start[loop_count];
+	}
+
+	if (queue_mode && wav_buffer_ready && !wav_buffer_in_progress && !wav_buffer_done)
+	{
+		current_buffer_position[1]= wav_data_start[1];
+		buffer_being_written= 1;
+		wav_buffer_in_progress= true;
+		wav_buffer_ready= false;
+		log_main("starting buffer on call_count=%u", call_count);
 	}
 
 	ret = snd_pcm_wait(pcm_handle, 1000); // returns 1 normally
@@ -128,15 +143,28 @@ int alsa_update()
 		else 
 		{
 			current_buffer_position[buffer_being_written] += (frames_written * FRAME_SIZE);
-			if (current_buffer_position[buffer_being_written] >= wav_data_size[buffer_being_written] && !done)
+			if (current_buffer_position[buffer_being_written] >= wav_data_size[buffer_being_written])
 			{
 				previous_buffer_position= current_buffer_position[buffer_being_written];
 				current_buffer_position[buffer_being_written]= wav_data_start[buffer_being_written];
-				buffer_being_written++;
-				if (wav_data_size[buffer_being_written] == 0)
+				if (queue_mode)
+				{ 
+					if (buffer_being_written != FILL)
+					{
+						buffer_being_written= FILL;
+						wav_buffer_in_progress= false;
+						wav_buffer_done= true;
+						log_main("buffer done on call_count=%u", call_count);
+					}
+				} else
 				{
-					buffer_being_written= 0;
-					done= true;
+					if (!done)
+						buffer_being_written++;
+					if (wav_data_size[buffer_being_written] == 0)
+					{
+						buffer_being_written= FILL;
+						done= true;
+					}
 				}
 			}
 			if (previous_buffer_being_written != buffer_being_written)
