@@ -17,9 +17,10 @@ int main(int argc, char *argv[])
 	int period = -1;
 	short gray_noise= 0; //defaults to silence
 	short i, file_number;
+	int update_interval_millis= 9;
+	int length_seconds= 4;
 
-
-	while ((opt = getopt(argc, argv, "gqa:b:c:d:p:")) != -1)
+	while ((opt = getopt(argc, argv, "gqa:b:c:d:p:l:m:")) != -1)
 	{
 		switch (opt)
 		{
@@ -40,6 +41,12 @@ int main(int argc, char *argv[])
 			break;
 		case 'p':
 			period = atoi(optarg);
+			break;
+		case 'l':
+			length_seconds = atoi(optarg);
+			break;
+		case 'm':
+			update_interval_millis = atoi(optarg);
 			break;
 		case 'd':
 			strcpy(alsa_device, optarg);
@@ -62,23 +69,25 @@ int main(int argc, char *argv[])
 	if (alsa_init(alsa_device, period) != 0)
 		exit(-1);
 
-	file_number= 1 ;
-	for (i=0; i < 300; i++)
+	file_number= 1;
+	for (i=0; i < (length_seconds*1000/update_interval_millis); i++)
 	{
 		if (alsa_update() < 0)
 			exit(1);
-		sleepMicros(9000);
+		sleepMicros(update_interval_millis*1000);
 		if (queue_mode)
 		{
-			if (i == 30 || i == 90)
+			if (i % 69 == 0)
 			{
 				//always read into buffer 1
+				// printf("Opening %s (file=%u) on count=%u\n", wav_file[file_number], file_number, i);
 				if ((wav_file[file_number][0] != 0) && (read_wav_file(wav_file[file_number], FIRST) == 0))
 				{
 					wav_buffer_ready= 1; //start
 					wav_buffer_done= 0;
+					if (++file_number > 3 || wav_file[file_number][0] == 0)
+						file_number= 1;
 				}
-				file_number++;
 			}
 			// the following is for back-to-back plays:
 			// if (wav_buffer_done)

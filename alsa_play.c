@@ -38,9 +38,10 @@ uint32_t wav_data_start[NUMBER_OF_BUFFERS]= {0};
 char wav_buff[NUMBER_OF_BUFFERS][BUFFER_SIZE]= {0};
 
 bool wav_buffer_ready;
-bool wav_buffer_in_progress;
 bool wav_buffer_done;
 bool queue_mode= false;
+
+#define FILE_PARSE_LOGGING 0
 
 int alsa_update()
 {
@@ -50,12 +51,18 @@ int alsa_update()
 	snd_pcm_sframes_t frames_requested, frames_written;
 	uint32_t frames_written_count=0;
 	uint8_t loop_count=0;
-	uint32_t previous_buffer_position;
+
+	enum prev_curr {PREVIOUS, CURRENT};
+	enum buff_state {READY, IN_PROGRESS, DONE};
+	static bool wav_buffer[2][3]= {0};
+	wav_buffer[CURRENT][READY]= wav_buffer_ready;
+	wav_buffer[CURRENT][DONE]= wav_buffer_done;
 
 	static uint32_t current_buffer_position[4]= {0};
 	static uint32_t call_count=0;
 	static uint32_t total_frames_written_count=0;
 	static uint8_t buffer_being_written=0;
+	uint32_t previous_buffer_position;
 	static uint8_t previous_buffer_being_written=0;
 	static bool done= false;
 
@@ -68,24 +75,25 @@ int alsa_update()
 				current_buffer_position[loop_count]= wav_data_start[loop_count];
 	}
 
-	if (queue_mode && wav_buffer_ready && !wav_buffer_in_progress && !wav_buffer_done)
+	if (queue_mode && wav_buffer_ready && !wav_buffer[CURRENT][IN_PROGRESS] && !wav_buffer_done)
 	{
 		current_buffer_position[1]= wav_data_start[1];
 		buffer_being_written= 1;
-		wav_buffer_in_progress= true;
+		wav_buffer[CURRENT][IN_PROGRESS]= true;
 		wav_buffer_ready= false;
-		log_main("starting buffer on call_count=%u", call_count);
+		if (0)
+			log_main("starting buffer=%u on call_count=%u", buffer_being_written, call_count);
 	}
 
 	ret = snd_pcm_wait(pcm_handle, 1000); // returns 1 normally
 	if (ret == 0)
 	{
-		fprintf(stderr, "PCM timeout occurred\n");
+		log_main("PCM timeout occurred");
 		return -1;
 	}
 	else if (ret < 0)
 	{
-		fprintf(stderr, "PCM device error: %s\n", snd_strerror(ret));
+		log_main("PCM device error: %s", snd_strerror(ret));
 		return ret;
 	}
 
@@ -109,7 +117,7 @@ int alsa_update()
 			continue;
 		else if (frames_written == -EPIPE)
 		{
-			fprintf(stderr, "PCM write error: Underrun event\n");
+			log_main("PCM write error: Underrun event");
 			frames_written = snd_pcm_prepare(pcm_handle);
 			if (frames_written < 0)
 			{
@@ -122,7 +130,7 @@ int alsa_update()
 		}
 		else if (frames_written == -ESTRPIPE)
 		{
-			fprintf(stderr, "PCM write error: Stream is suspended\n");
+			log_main("PCM write error: Stream is suspended");
 			while ((frames_written = snd_pcm_resume(pcm_handle)) == -EAGAIN)
 			{
 				sleep(1); // wait until the suspend flag is released
@@ -151,10 +159,10 @@ int alsa_update()
 				{ 
 					if (buffer_being_written != FILL)
 					{
+						log_main("buffer=%u done on call_count=%u", buffer_being_written, call_count);
 						buffer_being_written= FILL;
-						wav_buffer_in_progress= false;
+						wav_buffer[CURRENT][IN_PROGRESS]= false;
 						wav_buffer_done= true;
-						log_main("buffer done on call_count=%u", call_count);
 					}
 				} else
 				{
@@ -167,7 +175,8 @@ int alsa_update()
 					}
 				}
 			}
-			if (previous_buffer_being_written != buffer_being_written)
+			// the following needs to be fixed to be useful, since the info was changed before this printout
+			if (0 && previous_buffer_being_written != buffer_being_written)
 			{
 				log_main("calls=%u frames: written=%u total=%u avail=%u  buffer: writing=%u prev_ending_position=%d",
 					call_count, frames_written, total_frames_written_count, avail_buffs, buffer_being_written,
@@ -179,6 +188,15 @@ int alsa_update()
 		frames_written_count += frames_written;
 
 		avail_buffs = snd_pcm_avail(pcm_handle);
+		if (0 && (wav_buffer[CURRENT][READY] != wav_buffer[PREVIOUS][READY] ||
+			wav_buffer[CURRENT][IN_PROGRESS] != wav_buffer[PREVIOUS][IN_PROGRESS] ||
+			wav_buffer[CURRENT][DONE] != wav_buffer[PREVIOUS][DONE] ))
+				log_main("calls=%d  loops=%d frames_written=%d avail=%d buff=%u ready=%u in_prog=%u done=%u",
+					call_count, loop_count, frames_written_count, avail_buffs, buffer_being_written,
+					wav_buffer[CURRENT][READY], wav_buffer[CURRENT][IN_PROGRESS], wav_buffer[CURRENT][DONE]);
+		wav_buffer[PREVIOUS][READY]= wav_buffer[CURRENT][READY];
+		wav_buffer[PREVIOUS][DONE]= wav_buffer[CURRENT][DONE];
+		wav_buffer[PREVIOUS][IN_PROGRESS]= wav_buffer[CURRENT][IN_PROGRESS];
 		// log_main("call_count=%d  loop_count=%d frames_count=%d avail=%d",
 		// 	call_count, loop_count, frames_written_count, avail_buffs);
 		loop_count += 1;
@@ -567,9 +585,10 @@ int read_wav_file(char *wav_file, uint8_t buffer_number)
 
 	// !! currently truncating the file by the remainder instead of padding
 	wav_data_size[buffer_number]= (uint32_t) data_size - remainder; // + bytes_to_add;
-	printf("file=%s: data_start=0x%x orig_data_size=%u remainder=%u final_size=%u; read_micros=%u\n", //added_bytes=%u 
-		wav_file, wav_data_start[buffer_number], data_size, remainder, wav_data_size[buffer_number], //bytes_to_add, 
-		(uint32_t) (micros() - micros_at_start));
+	if (FILE_PARSE_LOGGING)
+		log_main("file=%s: data_start=0x%x orig_data_size=%u remainder=%u final_size=%u; read_micros=%u", //added_bytes=%u 
+			wav_file, wav_data_start[buffer_number], data_size, remainder, wav_data_size[buffer_number], //bytes_to_add, 
+			(uint32_t) (micros() - micros_at_start));
 
 	return 0;
 }
