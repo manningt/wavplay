@@ -24,7 +24,7 @@
 #define NUM_CHANNELS 1
 #define WAV_SAMPLE_RATE 11025
 #define FRAME_SIZE (BITS_PER_SAMPLE/8 * NUM_CHANNELS)
-#define PERIOD_SIZE 120
+#define PERIOD_SIZE 160 //a period size of 120 caused pipe errors
 // data rate = channels * bits_per_sample/8 * sample_rate * BITS_PER_SAMPLE/2 = 22050 (S16 format)
 // ?? interrupt period = period size * (BITS_PER_SAMPLE/8 * NUM_CHANNELS) / data rate =120*2/22050 = 2.721 millis
 #define ALSA_BUFFER_SIZE_MULTIPLIER 20 //has to be at least 20
