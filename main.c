@@ -19,8 +19,9 @@ int main(int argc, char *argv[])
 	short i, file_number;
 	int update_interval_millis= 9;
 	int length_seconds= 4;
+	short speak_modulus= 69;
 
-	while ((opt = getopt(argc, argv, "gqa:b:c:d:p:l:m:")) != -1)
+	while ((opt = getopt(argc, argv, "gqa:b:c:d:p:l:m:t:")) != -1)
 	{
 		switch (opt)
 		{
@@ -45,8 +46,11 @@ int main(int argc, char *argv[])
 		case 'l':
 			length_seconds = atoi(optarg);
 			break;
-		case 'm':
+		case 't':
 			update_interval_millis = atoi(optarg);
+			break;
+		case 'm':
+			speak_modulus = atoi(optarg);
 			break;
 		case 'd':
 			strcpy(alsa_device, optarg);
@@ -77,30 +81,24 @@ int main(int argc, char *argv[])
 		sleepMicros(update_interval_millis*1000);
 		if (queue_mode)
 		{
-			if (i % 69 == 0)
+			if (i % speak_modulus == 0)
 			{
-				//always read into buffer 1
-				// printf("Opening %s (file=%u) on count=%u\n", wav_file[file_number], file_number, i);
-				if ((wav_file[file_number][0] != 0) && (read_wav_file(wav_file[file_number], FIRST) == 0))
+				// NOTE: running with a modulus of 1 will do back-to-back
+				if ( (i/speak_modulus) == 1 || wav_buffer_done) 
 				{
-					wav_buffer_ready= 1; //start
-					wav_buffer_done= 0;
-					if (++file_number > 3 || wav_file[file_number][0] == 0)
-						file_number= 1;
+					//always read into buffer 1
+					// printf("Opening %s (file=%u) on count=%u\n", wav_file[file_number], file_number, i);
+					if ((wav_file[file_number][0] != 0) && (read_wav_file(wav_file[file_number], FIRST) == 0))
+					{
+						wav_buffer_ready= 1; //start
+						wav_buffer_done= 0;
+						if (++file_number > 3 || wav_file[file_number][0] == 0)
+							file_number= 1;
+					}
 				}
 			}
-			// the following is for back-to-back plays:
-			// if (wav_buffer_done)
-			// {
-			// 	printf("restarting buffer load on count=%u",i);
-			// 	wav_buffer_ready= 1;
-			// 	wav_buffer_done= 0;
-			// }
 		}
 	}
-
-	// printf("sleeping...\n");
-	// sleepMicros(2000000);
 	// alsa_play();
 	alsa_deinit();
 
